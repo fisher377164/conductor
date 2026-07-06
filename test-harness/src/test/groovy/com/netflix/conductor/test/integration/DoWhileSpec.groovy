@@ -23,6 +23,7 @@ import com.netflix.conductor.core.execution.tasks.Join
 import com.netflix.conductor.core.execution.tasks.SubWorkflow
 import com.netflix.conductor.test.base.AbstractSpecification
 
+import static com.netflix.conductor.common.metadata.tasks.TaskType.TASK_TYPE_SUB_WORKFLOW
 import static com.netflix.conductor.test.util.WorkflowTestUtil.verifyPolledAndAcknowledgedTask
 
 class DoWhileSpec extends AbstractSpecification {
@@ -403,6 +404,13 @@ class DoWhileSpec extends AbstractSpecification {
         and: "JOIN task is executed"
         asyncSystemTaskExecutor.execute(joinTask, joinId)
 
+        and: "the sub workflow system task is executed"
+        def doWhileSubWfTask = workflowExecutionService.getExecutionStatus(workflowInstanceId, true)
+                .tasks.find { it.taskType == TASK_TYPE_SUB_WORKFLOW && it.status == Task.Status.SCHEDULED }
+        if (doWhileSubWfTask) {
+            asyncSystemTaskExecutor.execute(subWorkflowTask, doWhileSubWfTask.taskId)
+        }
+
         then: "Verify that the task was polled and acknowledged and workflow is in completed state"
         verifyPolledAndAcknowledgedTask(polledAndCompletedTask2)
         verifyTaskIteration(polledAndCompletedTask2[0] as Task, 1)
@@ -448,6 +456,7 @@ class DoWhileSpec extends AbstractSpecification {
         when: "sub workflow is retrieved"
         def workflow = workflowExecutionService.getExecutionStatus(workflowInstanceId, true)
         def subWorkflowInstanceId = workflow.getTaskByRefName('st1__1').subWorkflowId
+        sweep(subWorkflowInstanceId)
 
         then: "verify that the sub workflow is in a RUNNING state"
         with(workflowExecutionService.getExecutionStatus(subWorkflowInstanceId, true)) {

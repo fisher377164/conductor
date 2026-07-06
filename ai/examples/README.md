@@ -15,22 +15,24 @@ Ensure Conductor is running with AI integrations enabled:
 
 ### 2. Configure AI Providers
 
-Add the following to your conductor server configuration file:
+Set environment variables before starting the server:
 
-```properties
-# Enable AI integrations
-conductor.integrations.ai.enabled=true
-
+```bash
 # OpenAI (required for most examples)
-conductor.ai.openai.apiKey=sk-your-openai-api-key
+export OPENAI_API_KEY=sk-your-openai-api-key
 
 # Anthropic (optional, for RAG examples)
-conductor.ai.anthropic.apiKey=sk-ant-your-anthropic-key
+export ANTHROPIC_API_KEY=sk-ant-your-anthropic-key
 
-# Google Vertex AI (optional, for Gemini/Veo video examples)
-conductor.ai.gemini.project-id=your-gcp-project
-conductor.ai.gemini.location=us-central1
+# Google Gemini (optional, for Gemini/Veo examples)
+# Option 1: API key (simplest)
+export GEMINI_API_KEY=your-gemini-api-key
+# Option 2: Vertex AI — set project and location in application.properties
+```
 
+For vector database examples, add to `application.properties`:
+
+```properties
 # PostgreSQL Vector DB (for RAG/embedding examples)
 conductor.vectordb.instances[0].name=postgres-prod
 conductor.vectordb.instances[0].type=postgres
@@ -40,16 +42,16 @@ conductor.vectordb.instances[0].postgres.password=secret
 conductor.vectordb.instances[0].postgres.dimensions=1536
 ```
 
-### 3. MCP Weather Server (for MCP examples)
+### 3. MCP Test Server (for MCP examples)
 
-Install and start the MCP weather server:
+Install and start the MCP test server:
 
 ```bash
-# Install the MCP weather server
-pip install mcp-server-fetch
+# Install mcp-testkit — a test MCP server with 65 deterministic tools
+pip install mcp-testkit
 
-# Start the server in streamable HTTP mode
-python3 -m mcp_server_fetch --mode streamable-http --host localhost --port 3001 --stateless
+# Start the server in HTTP mode
+mcp-testkit --transport http
 ```
 
 The server will be available at `http://localhost:3001/mcp`.
@@ -76,6 +78,33 @@ The server will be available at `http://localhost:3001/mcp`.
 | `14-stabilityai-image.json` | Image generation with Stability AI (SD3.5) | Stability AI |
 | `15-pdf-generation.json` | Generate PDF from markdown content | None (built-in) |
 | `16-llm-to-pdf-pipeline.json` | LLM generates report → convert to PDF | OpenAI |
+| `17-web-search.json` | Chat with built-in web search for real-time info | OpenAI |
+| `18-code-execution.json` | Chat with built-in code execution sandbox | Google Gemini |
+| `19-coding-agent.json` | Coding agent: plan → write & run code → review | OpenAI |
+| `20-extended-thinking.json` | Extended thinking with token budget for reasoning | Anthropic |
+| `21-web-search-research-agent.json` | Research agent: web search → synthesize → PDF | OpenAI, Anthropic |
+| `22-multi-turn-chain.json` | Multi-turn conversation chaining with previousResponseId | OpenAI |
+| `30-rag-sqlite-vec.json` | Zero-infra RAG on the bundled SQLite + sqlite-vec store | OpenAI, SQLite (built-in) |
+
+### A2A (Agent2Agent) examples
+
+Conductor as an A2A **client** (calling remote agents) and **server** (exposing a workflow as an
+agent). The client tasks (`AGENT`, `GET_AGENT_CARD`, `CANCEL_AGENT`) need a reachable A2A
+agent — see `ai/src/test/resources/a2a/` for a runnable test agent. The server examples are exposed
+by registering them with `metadata.a2a.enabled=true` and `conductor.a2a.server.enabled=true`.
+
+| File | Description | Requirements |
+|------|-------------|--------------|
+| `10-a2a-call-agent.json` | Call a remote agent (poll mode) | A2A agent |
+| `11-a2a-get-agent-card.json` | Discover an agent's skills/capabilities | A2A agent |
+| `12-a2a-server-workflow.json` | Expose a workflow as an A2A agent (server) | `conductor.a2a.server.enabled=true` |
+| `23-a2a-streaming.json` | Call an agent in streaming (SSE) mode | A2A agent (`capabilities.streaming=true`) |
+| `24-a2a-push.json` | Call an agent in push-notification mode | A2A agent, `conductor.a2a.callback.url` |
+| `25-a2a-server-multi-turn.json` | Multi-turn server agent (HUMAN task → input-required → resume) | `conductor.a2a.server.enabled=true` |
+| `26-a2a-cancel.json` | Start then cancel a remote agent task | A2A agent |
+| `27-a2a-multi-agent.json` | Call multiple agents in parallel (FORK_JOIN → JOIN) | A2A agents |
+| `28-a2a-llm-pick-skill.json` | Discover an agent, let an LLM pick the prompt, then call it | A2A agent, OpenAI/Anthropic |
+| `29-a2a-client-multi-turn.json` | Client multi-turn: branch on input-required, re-call with the same context | A2A agent |
 
 ---
 
@@ -206,6 +235,26 @@ curl -X POST 'http://localhost:8080/api/metadata/workflow' \
 curl -X POST 'http://localhost:8080/api/workflow/complete_rag_demo' \
   -H 'Content-Type: application/json' \
   -d '{}'
+```
+
+### 30. RAG on SQLite (sqlite-vec, zero infrastructure)
+
+Runs the full index → search → answer RAG loop against the **embedded** SQLite + sqlite-vec vector
+store — no PostgreSQL, MongoDB or Pinecone required. When the server runs with `conductor.db.type=sqlite`
+and `conductor.integrations.ai.enabled=true`, Conductor bundles the native `vec0` extension and
+auto-registers a vector DB instance named `default`, which this workflow targets. Embeddings are
+requested at 256 dimensions to match that default instance.
+
+```bash
+# Register
+curl -X POST 'http://localhost:8080/api/metadata/workflow' \
+  -H 'Content-Type: application/json' \
+  -d @30-rag-sqlite-vec.json
+
+# Execute with a question
+curl -X POST 'http://localhost:8080/api/workflow/rag_sqlite_vec_demo' \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "What vector databases does Conductor support?"}'
 ```
 
 ### 8. MCP List Tools
@@ -346,6 +395,90 @@ curl -X POST 'http://localhost:8080/api/workflow/llm_to_pdf_pipeline' \
   -d '{"topic": "Cloud Migration Best Practices", "audience": "CTO and engineering leadership"}'
 ```
 
+### 17. Web Search
+
+```bash
+# Register
+curl -X POST 'http://localhost:8080/api/metadata/workflow' \
+  -H 'Content-Type: application/json' \
+  -d @17-web-search.json
+
+# Execute with a question about current events
+curl -X POST 'http://localhost:8080/api/workflow/web_search_workflow' \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "What are the latest developments in AI regulation?"}'
+```
+
+### 18. Code Execution
+
+```bash
+# Register
+curl -X POST 'http://localhost:8080/api/metadata/workflow' \
+  -H 'Content-Type: application/json' \
+  -d @18-code-execution.json
+
+# Execute with a data analysis task
+curl -X POST 'http://localhost:8080/api/workflow/code_execution_workflow' \
+  -H 'Content-Type: application/json' \
+  -d '{"task": "Generate the first 50 Fibonacci numbers and calculate the golden ratio convergence"}'
+```
+
+### 19. Coding Agent
+
+```bash
+# Register
+curl -X POST 'http://localhost:8080/api/metadata/workflow' \
+  -H 'Content-Type: application/json' \
+  -d @19-coding-agent.json
+
+# Execute — the agent plans, writes code, executes, and reviews
+curl -X POST 'http://localhost:8080/api/workflow/coding_agent' \
+  -H 'Content-Type: application/json' \
+  -d '{"task": "Write a Python function that converts Roman numerals to integers, with unit tests"}'
+```
+
+### 20. Extended Thinking
+
+```bash
+# Register
+curl -X POST 'http://localhost:8080/api/metadata/workflow' \
+  -H 'Content-Type: application/json' \
+  -d @20-extended-thinking.json
+
+# Execute with a complex reasoning problem
+curl -X POST 'http://localhost:8080/api/workflow/extended_thinking_workflow' \
+  -H 'Content-Type: application/json' \
+  -d '{"problem": "Design a distributed consensus algorithm for a system with up to 3 Byzantine nodes out of 10 total. Explain the correctness proof."}'
+```
+
+### 21. Web Research Agent
+
+```bash
+# Register
+curl -X POST 'http://localhost:8080/api/metadata/workflow' \
+  -H 'Content-Type: application/json' \
+  -d @21-web-search-research-agent.json
+
+# Execute — researches the topic, writes a report, converts to PDF
+curl -X POST 'http://localhost:8080/api/workflow/web_research_agent' \
+  -H 'Content-Type: application/json' \
+  -d '{"topic": "The state of WebAssembly in 2026"}'
+```
+
+### 22. Multi-Turn Conversation Chain
+
+```bash
+# Register
+curl -X POST 'http://localhost:8080/api/metadata/workflow' \
+  -H 'Content-Type: application/json' \
+  -d @22-multi-turn-chain.json
+
+# Execute — second turn uses previousResponseId to continue the conversation without resending history
+curl -X POST 'http://localhost:8080/api/workflow/multi_turn_chain' \
+  -H 'Content-Type: application/json' \
+  -d '{"topic": "Real-time collaborative document editor"}'
+```
+
 ---
 
 ## Register All Workflows at Once
@@ -380,10 +513,10 @@ conductor.vectordb.instances[0].postgres.dimensions=1536
 
 ### "No configuration found for: openai"
 
-Ensure you have set the OpenAI API key:
+Ensure you have set the OpenAI API key environment variable:
 
-```properties
-conductor.ai.openai.apiKey=sk-your-openai-api-key
+```bash
+export OPENAI_API_KEY=sk-your-openai-api-key
 ```
 
 ### MCP Server Connection Refused

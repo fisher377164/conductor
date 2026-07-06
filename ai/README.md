@@ -38,6 +38,7 @@ The Conductor AI module provides built-in integration with 12 popular LLM provid
 | **PostgreSQL (pgvector)** | ✅ | ✅ | Postgres with vector extension |
 | **Pinecone** | ✅ | ✅ | Managed vector database |
 | **MongoDB Atlas** | ✅ | ✅ | MongoDB vector search |
+| **SQLite (sqlite-vec)** | ✅ | ✅ | Embedded, zero-infra; native `vec0` extension bundled. Auto-registered as `default` when SQLite persistence + AI are enabled |
 
 > **Note**: Multiple named instances of these providers can be configured. See [Vector Database Configuration](VECTORDB_CONFIGURATION.md) for details.
 
@@ -80,6 +81,13 @@ Multi-turn conversational AI with support for tool calling.
 | `topP` | Number | ❌ | Nucleus sampling parameter |
 | `stopSequences` | Array | ❌ | Sequences that stop generation |
 | `tools` | Array | ❌ | Tool definitions for function calling |
+| `webSearch` | Boolean | ❌ | Enable provider-native web search (OpenAI, Anthropic, Gemini) |
+| `codeInterpreter` | Boolean | ❌ | Enable sandboxed code execution (OpenAI, Anthropic, Gemini) |
+| `fileSearchVectorStoreIds` | Array | ❌ | Vector store IDs for OpenAI file search |
+| `thinkingTokenLimit` | Integer | ❌ | Token budget for extended thinking (Anthropic, Gemini) |
+| `reasoningEffort` | String | ❌ | Reasoning effort: `low`, `medium`, `high` (OpenAI) |
+| `googleSearchRetrieval` | Boolean | ❌ | Enable Google Search grounding (Gemini only) |
+| `previousResponseId` | String | ❌ | Chain multi-turn conversations without resending history (OpenAI/Azure) |
 
 **Outputs:**
 

@@ -46,6 +46,7 @@ import { EventMonitor } from "pages/eventMonitor/EventMonitor";
 import { EventMonitorDetail } from "pages/eventMonitor/EventMonitorDetail/EventMonitorDetail";
 import { SchedulerExecutions, WorkflowSearch } from "pages/executions";
 import { pluginRegistry } from "plugins/registry";
+import { RouteObject } from "react-router-dom";
 import { featureFlags, FEATURES } from "utils";
 import {
   API_REFERENCE_URL,
@@ -54,10 +55,21 @@ import {
   NEW_TASK_DEF_URL,
   RUN_WORKFLOW_URL,
   SCHEDULER_DEFINITION_URL,
-  TAGS_DASHBOARD_URL,
   TASK_DEF_URL,
   TASK_QUEUE_URL,
   WORKFLOW_DEFINITION_URL,
+} from "utils/constants/route";
+import {
+  AgentDefinitions,
+  AgentExecutions as AgentExecutionsPage,
+  Secrets as AgentSecretsPage,
+  Skills as SkillsPage,
+} from "pages/agent";
+import {
+  AGENT_DEFINITION_URL,
+  AGENT_EXECUTIONS_URL,
+  AGENT_SECRETS_URL,
+  SKILLS_URL,
 } from "utils/constants/route";
 import EventHandlerDefinition from "../pages/definition/EventHandler/EventHandler";
 import Execution from "../pages/execution/Execution";
@@ -67,7 +79,6 @@ import KitchenSink from "../pages/kitchensink/KitchenSink";
 import ThemeSampler from "../pages/kitchensink/ThemeSampler";
 import TaskQueue from "../pages/queueMonitor/TaskQueue";
 import { Schedule } from "../pages/scheduler";
-import TagsDashboard from "pages/tags/TagsDashboard";
 
 /**
  * Core authenticated routes (OSS)
@@ -164,12 +175,6 @@ const getCoreAuthenticatedRoutes = () => [
     element: <EventMonitorDetail />,
   },
 
-  // Tags Dashboard
-  {
-    path: TAGS_DASHBOARD_URL.BASE,
-    element: <TagsDashboard />,
-  },
-
   // API Reference
   {
     path: API_REFERENCE_URL.BASE,
@@ -197,6 +202,17 @@ const getCoreAuthenticatedRoutes = () => [
     path: "/flags",
     element: <CreatorFlags />,
   },
+
+  // Embedded AgentSpan pages (registered only when AGENTSPAN_ENABLED, i.e.
+  // the server's conductor.integrations.ai.enabled is true).
+  ...(featureFlags.isEnabled(FEATURES.AGENTSPAN_ENABLED)
+    ? [
+        { path: AGENT_DEFINITION_URL.BASE, element: <AgentDefinitions /> },
+        { path: AGENT_EXECUTIONS_URL, element: <AgentExecutionsPage /> },
+        { path: SKILLS_URL.BASE, element: <SkillsPage /> },
+        { path: AGENT_SECRETS_URL, element: <AgentSecretsPage /> },
+      ]
+    : []),
 ];
 
 /**
@@ -216,7 +232,7 @@ const getIndexRoute = (isPlayground: boolean) => {
 /**
  * Build the complete route configuration
  */
-export const getRoutes = () => {
+export const getRoutes = (): RouteObject[] => {
   const isPlayground = featureFlags.isEnabled(FEATURES.PLAYGROUND);
 
   // Get routes from plugins
