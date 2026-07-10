@@ -1,0 +1,15 @@
+Error starting ApplicationContext. To display the condition evaluation report re-run your application with 'debug' enabled.
+4141 [main] ERROR org.springframework.boot.diagnostics.LoggingFailureAnalysisReporter [] -
+
+***************************
+APPLICATION FAILED TO START
+***************************
+
+Description:
+
+Parameter 2 of constructor in com.netflix.conductor.core.dal.ExecutionDAOFacade required a bean of type 'com.netflix.conductor.dao.IndexDAO' that could not be found.
+
+
+Action:
+
+Consider defining a bean of type 'com.netflix.conductor.dao.IndexDAO' in your configuration.
