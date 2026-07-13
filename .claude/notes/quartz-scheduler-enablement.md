@@ -96,15 +96,11 @@ net effect is single-cron-only today.
   doc, not setup docs, and it's partly stale — it describes a
   `conductor-scheduler-sqlite-persistence` module that does not actually exist in
   the repo (not in `settings.gradle`, no such directory).
-- **MySQL scheduling requires a manual build change** — add
-  `implementation project(':conductor-scheduler-mysql-persistence')` to
-  `server/build.gradle` yourself; it's not on the classpath by default.
 - **No docker-compose file wires this up.** Neither root `docker-compose.yaml`/
   `docker-compose-local.yaml` nor anything under `docker/` sets
   `conductor.scheduler.enabled` or defines a scheduler-specific service — you must
   add the env var/property yourself on top of an existing Postgres-backed compose setup
   (`docker-compose-postgres.yaml` + `config-postgres.properties` is the closest base).
-- The whole module (`scheduler`, `scheduler-postgres-persistence`,
-  `scheduler-mysql-persistence`) was introduced in one commit,
-  `25b7c8f1e feat: add conductor-scheduler-postgres-persistence module (#885)`,
+- The whole module (`scheduler`, `scheduler-postgres-persistence`) was introduced
+  in one commit, `25b7c8f1e feat: add conductor-scheduler-postgres-persistence module (#885)`,
   and is still under active follow-up (multi-cron add/revert happened after).
