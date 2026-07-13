@@ -10,18 +10,14 @@ Quartz-style cron strings.
 
 - `scheduler/` — core auto-configuration, service, REST API, model
 - `scheduler-postgres-persistence/` — Postgres DAO + Flyway migrations
-- `scheduler-mysql-persistence/` — MySQL DAO + Flyway migrations
 
-All three are declared in root `settings.gradle` (renamed to `conductor-scheduler`,
-`conductor-scheduler-postgres-persistence`, `conductor-scheduler-mysql-persistence`).
+Both are declared in root `settings.gradle` (renamed to `conductor-scheduler`,
+`conductor-scheduler-postgres-persistence`).
 
-**Only Postgres is wired into the server by default.**
 `server/build.gradle:45`:
 ```groovy
 implementation project(':conductor-scheduler-postgres-persistence')
 ```
-There is no equivalent line for `conductor-scheduler-mysql-persistence` — if you need
-MySQL-backed scheduling you must add that dependency yourself and rebuild.
 
 ## Activation gates (all must be true)
 
@@ -30,12 +26,10 @@ MySQL-backed scheduling you must add that dependency yourself and rebuild.
    via `@ConditionalOnProperty(name = "conductor.scheduler.enabled", havingValue = "true", matchIfMissing = false)`.
    Default when unset: disabled.
 
-2. **`conductor.db.type` must be `postgres` or `mysql`**
-   The persistence auto-configs use `@ConditionalOnExpression`, not a simple property, combining both conditions:
+2. **`conductor.db.type` must be `postgres`**
+   The persistence auto-config uses `@ConditionalOnExpression`, not a simple property, combining both conditions:
    - `PostgresSchedulerConfiguration` (`scheduler-postgres-persistence/.../config/PostgresSchedulerConfiguration.java:34-37`):
      `"'${conductor.db.type:}' == 'postgres' && '${conductor.scheduler.enabled:false}' == 'true'"`
-   - `MySQLSchedulerConfiguration` (`scheduler-mysql-persistence/.../config/MySQLSchedulerConfiguration.java:34-37`):
-     `"'${conductor.db.type:}' == 'mysql' && '${conductor.scheduler.enabled:false}' == 'true'"`
 
    Server default (`server/src/main/resources/application.properties:17`) is
    `conductor.db.type=sqlite` — scheduler persistence never activates under the default profile.
@@ -49,7 +43,7 @@ No properties file in the repo currently sets `conductor.scheduler.enabled=true`
 not even `docker/server/config/config-postgres.properties` (which does set
 `conductor.db.type=postgres` at line 2). You must add it yourself.
 
-## Steps to enable (Postgres path — default supported backend)
+## Steps to enable
 
 1. Ensure `server/build.gradle` depends on `conductor-scheduler-postgres-persistence`.
 2. Use/point config at `docker/server/config/config-postgres.properties` (sets `conductor.db.type=postgres`), or set `conductor.db.type=postgres` in whatever properties file/env you use.
