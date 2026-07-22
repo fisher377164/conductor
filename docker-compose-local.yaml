@@ -15,7 +15,7 @@ services:
       - "6377:6379"
 
   elasticsearch-citi:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.11
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
