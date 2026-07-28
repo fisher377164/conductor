@@ -1,0 +1,15 @@
+dependencies {
+
+    implementation project(':conductor-common')
+    implementation project(':conductor-core')
+
+    implementation "org.apache.kafka:kafka-clients:${revKafka}"
+
+    implementation "com.fasterxml.jackson.core:jackson-databind"
+    implementation "com.fasterxml.jackson.core:jackson-core"
+
+    compileOnly 'org.springframework.boot:spring-boot-starter'
+    compileOnly 'org.springframework.boot:spring-boot-starter-web'
+
+    implementation "org.springframework.boot:spring-boot-starter-log4j2"
+}

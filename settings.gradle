@@ -44,6 +44,7 @@ include 'grpc-client'
 
 // community modules
 include 'workflow-event-listener'
+include 'orchestration-event-kafka-listener'
 include 'task-status-listener'
 include 'test-util'
 include 'kafka'

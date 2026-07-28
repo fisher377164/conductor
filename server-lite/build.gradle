@@ -50,6 +50,7 @@ dependencies {
 
     //Event Listener
     implementation project(':conductor-workflow-event-listener')
+    implementation project(':conductor-orchestration-event-kafka-listener')
 
 
     implementation 'org.springframework.boot:spring-boot-starter'
