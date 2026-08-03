@@ -1,3 +1,15 @@
+/*
+ * Copyright 2026 Conductor Authors.
+ * <p>
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 package com.netflix.conductor.contribs.listener.orchestrationkafka;
 
 import java.util.ArrayList;
@@ -63,8 +75,10 @@ public class OrchestrationEventKafkaPublisherProperties {
     }
 
     /**
-     * Maps {@link #producer} against {@link ProducerConfig} keys, filling in sane defaults for
-     * anything the caller didn't set.
+     * Maps {@link #producer} against {@link ProducerConfig} keys. These are overrides layered on
+     * top of {@code KafkaProducerManager}'s own base producer config (bootstrap servers, SSL/SASL,
+     * etc.) by {@code OrchestrationEventKafkaPublisher}; anything not set here falls through to
+     * that shared, globally-configured base.
      */
     public Map<String, Object> toProducerConfig() {
         Map<String, Object> config = new HashMap<>();
@@ -73,26 +87,6 @@ public class OrchestrationEventKafkaPublisherProperties {
                 config.put(key, producer.get(key));
             }
         }
-
-        setDefaultIfBlank(config, ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "kafka:29092");
-        setDefaultIfBlank(
-                config,
-                ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-                "org.apache.kafka.common.serialization.StringSerializer");
-        setDefaultIfBlank(
-                config,
-                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-                "org.apache.kafka.common.serialization.StringSerializer");
-        setDefaultIfBlank(config, ProducerConfig.CLIENT_ID_CONFIG, "orchestration-event-kafka-publisher");
-
         return config;
-    }
-
-    private static void setDefaultIfBlank(
-            Map<String, Object> config, String key, String defaultValue) {
-        Object value = config.get(key);
-        if (value == null || (value instanceof String stringValue && stringValue.isBlank())) {
-            config.put(key, defaultValue);
-        }
     }
 }

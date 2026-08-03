@@ -18,7 +18,9 @@ Group: `com.netflix.conductor`
 ```properties
 conductor.workflow-status-listener.type=orchestration-kafka
 
-# Kafka producer properties (any org.apache.kafka.clients.producer.ProducerConfig key)
+# Optional: any org.apache.kafka.clients.producer.ProducerConfig key, layered on top of the
+# shared KafkaProducerManager base config (see "Producer configuration" below) for anything this
+# listener needs to override, e.g.:
 conductor.workflow-status-listener.orchestration-kafka.producer[bootstrap.servers]=localhost:9092
 
 # Optional: topic used when no per-event override applies (default: orchestration-workflow-events)
@@ -63,9 +65,22 @@ configurable per-deployment.
 
 `ConductorEventFactory` builds this message from a `WorkflowModel` with no I/O involved, so it's
 unit tested independently of Kafka (`ConductorEventFactoryTest`). `OrchestrationEventKafkaPublisher`
-owns only producer lifecycle and delivery, and accepts an injected `Producer<String, String>` so
+owns only delivery, not producer lifecycle, and accepts an injected `Producer<String, String>` so
 tests can substitute `org.apache.kafka.clients.producer.MockProducer` instead of a real broker
 (`OrchestrationEventKafkaPublisherTest`).
+
+## Producer configuration
+
+The Kafka producer itself is obtained from `KafkaProducerManager` (`conductor-kafka`, the same
+manager the `kafka-publish` task uses), via
+`KafkaProducerManager.getProducerForOverrides(Map<String, Object>)`. This means broker
+connectivity/security settings (bootstrap servers, SSL, SASL, truststore, etc.) configured once,
+globally, for `KafkaProducerManager` are shared by this listener automatically — there is no need
+to duplicate them under `conductor.workflow-status-listener.orchestration-kafka.producer`. That
+`producer` map is only for overriding specific keys for this listener; anything not set there
+falls through to the manager's shared base config. `KafkaProducerManager` also owns the producer's
+lifecycle (a shared, size/time-bounded cache keyed by resolved properties), so this listener does
+not close the producer itself.
 
 ## Running alongside other listeners
 

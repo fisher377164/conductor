@@ -1,24 +1,35 @@
+/*
+ * Copyright 2026 Conductor Authors.
+ * <p>
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 package com.netflix.conductor.contribs.listener.orchestrationkafka;
 
-import java.time.Duration;
 import java.util.Set;
 
-import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.DisposableBean;
 
+import com.netflix.conductor.contribs.tasks.kafka.KafkaProducerManager;
 import com.netflix.conductor.core.listener.WorkflowStatusListener;
 import com.netflix.conductor.model.WorkflowModel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Publishes workflow lifecycle events, packed as {@link ConductorEvent}, to a Kafka topic. */
-public class OrchestrationEventKafkaPublisher implements WorkflowStatusListener, DisposableBean {
+public class OrchestrationEventKafkaPublisher implements WorkflowStatusListener {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(OrchestrationEventKafkaPublisher.class);
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(OrchestrationEventKafkaPublisher.class);
 
     private final OrchestrationEventKafkaPublisherProperties properties;
     private final ObjectMapper objectMapper;
@@ -26,9 +37,21 @@ public class OrchestrationEventKafkaPublisher implements WorkflowStatusListener,
     private final ConductorEventFactory eventFactory;
     private final Set<WorkflowEventType> subscribedEvents;
 
+    /**
+     * Producer comes from the shared {@link KafkaProducerManager}, so this listener picks up the
+     * same globally-configured broker/SSL settings as the kafka-publish task, layering its own
+     * {@link OrchestrationEventKafkaPublisherProperties#getProducer() producer} overrides on top.
+     * The manager owns the producer's lifecycle (shared cache, eviction), so this listener does not
+     * close it itself.
+     */
     public OrchestrationEventKafkaPublisher(
-            OrchestrationEventKafkaPublisherProperties properties, ObjectMapper objectMapper) {
-        this(properties, objectMapper, new KafkaProducer<>(properties.toProducerConfig()));
+            OrchestrationEventKafkaPublisherProperties properties,
+            ObjectMapper objectMapper,
+            KafkaProducerManager kafkaProducerManager) {
+        this(
+                properties,
+                objectMapper,
+                kafkaProducerManager.getProducerForOverrides(properties.toProducerConfig()));
     }
 
     /** Visible for tests, so a {@code MockProducer} can stand in for a real broker connection. */
@@ -41,16 +64,6 @@ public class OrchestrationEventKafkaPublisher implements WorkflowStatusListener,
         this.producer = producer;
         this.eventFactory = new ConductorEventFactory();
         this.subscribedEvents = Set.copyOf(properties.getSubscribedEvents());
-    }
-
-    @Override
-    public void destroy() {
-        try {
-            producer.close(Duration.ofSeconds(10));
-            LOGGER.info("Kafka producer shut down gracefully.");
-        } catch (Exception e) {
-            LOGGER.error("Error shutting down Kafka producer", e);
-        }
     }
 
     @Override
@@ -106,7 +119,9 @@ public class OrchestrationEventKafkaPublisher implements WorkflowStatusListener,
             ConductorEvent message = eventFactory.buildMessage(eventType, workflow);
             String jsonPayload = objectMapper.writeValueAsString(message);
             String topic =
-                    properties.getEventTopics().getOrDefault(eventType, properties.getDefaultTopic());
+                    properties
+                            .getEventTopics()
+                            .getOrDefault(eventType, properties.getDefaultTopic());
 
             ProducerRecord<String, String> record =
                     new ProducerRecord<>(topic, workflow.getWorkflowId(), jsonPayload);
