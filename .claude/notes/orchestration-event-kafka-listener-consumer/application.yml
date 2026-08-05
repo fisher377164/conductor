@@ -1,0 +1,42 @@
+app:
+  kafka:
+    conductor-event-topic: conductor.events
+
+spring:
+  kafka:
+    bootstrap-servers:
+      - kafka-1.example.com:9093
+      - kafka-2.example.com:9093
+
+    consumer:
+      group-id: conductor-event-consumer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+      properties:
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: com.example.kafka.event
+
+    listener:
+      ack-mode: record
+      missing-topics-fatal: false
+
+    security:
+      protocol: SSL
+
+    ssl:
+      key-store-location: file:/opt/application/certificates/client-keystore.p12
+      key-store-password: ${KAFKA_KEYSTORE_PASSWORD}
+      key-store-type: PKCS12
+
+      trust-store-location: file:/opt/application/certificates/client-truststore.p12
+      trust-store-password: ${KAFKA_TRUSTSTORE_PASSWORD}
+      trust-store-type: PKCS12
+
+
+#
+#spring:
+#  kafka:
+#    ssl:
+#      key-store-location: classpath:certificates/client-keystore.p12
+#      trust-store-location: classpath:certificates/client-truststore.p12

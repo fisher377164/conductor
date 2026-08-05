@@ -51,22 +51,22 @@ public class KafkaProducerManager {
      * without a Spring context.
      */
     @Value("${bootstrap.servers:}")
-    String bootStrapServer;
+    private String bootStrapServer;
 
     @Value("${properties.security.protocol:}")
-    String securityProtocol;
+    private String securityProtocol;
 
     @Value("${ssl.truststore.location:}")
-    String sslTrustStoreLocation;
+    private String sslTrustStoreLocation;
 
     @Value("${ssl.truststore.password:}")
-    String sslTrustStorePassword;
+    private String sslTrustStorePassword;
 
     @Value("${ssl.keystore.location:}")
-    String sslKeystoreLocation;
+    private String sslKeystoreLocation;
 
     @Value("${ssl.keystore.password:}")
-    String sslKeystorePassword;
+    private String sslKeystorePassword;
 
     private final String requestTimeoutConfig;
     private final Cache<Properties, Producer> kafkaProducerCache;
