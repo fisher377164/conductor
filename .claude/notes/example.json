@@ -1,0 +1,39 @@
+{
+  "namespace": "com.citi.grr.orchestration.service.async",
+  "eventType": "STARTED",
+  "eventID": "STARTED",
+  "executionId": "3234db04-26f7-4eea-b0a0-0255063e678e",
+  "eventTimeStamp": "2026-08-07T15:03:46.181Z",
+  "status": "STARTED",
+  "messageVersion": "1.0",
+  "messagePayload": [
+    {
+      "name": "workflowName",
+      "value": "hello_world"
+    },
+    {
+      "name": "version",
+      "value": "1"
+    },
+    {
+      "name": "startTime",
+      "value": "2026-08-07T15:03:46.151Z"
+    },
+    {
+      "name": "updateTime",
+      "value": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "priority",
+      "value": "0"
+    },
+    {
+      "name": "input",
+      "value": "{}"
+    },
+    {
+      "name": "output",
+      "value": "{}"
+    }
+  ]
+}
