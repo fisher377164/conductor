@@ -20,64 +20,61 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.netflix.conductor.model.TaskModel;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class OrchestrationEventKafkaPublisherTest {
+class OrchestrationTaskStatusListenerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private MockProducer<String, String> mockProducer;
-    private OrchestrationEventKafkaPublisher publisher;
+    private OrchestrationTaskStatusListener listener;
 
     @BeforeEach
     void setUp() {
         mockProducer = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
-        publisher = new OrchestrationEventKafkaPublisher(objectMapper, mockProducer);
+        OrchestrationEventKafkaPublisherProperties properties =
+                new OrchestrationEventKafkaPublisherProperties();
+        properties.setDefaultTopic("orchestration-workflow-events");
+        listener =
+                new OrchestrationTaskStatusListener(
+                        properties,
+                        new OrchestrationEventKafkaPublisher(objectMapper, mockProducer));
     }
 
-    private ConductorEvent event(String executionId) {
-        return new ConductorEvent(
-                "com.citi.grr.orchestration.service.async",
-                ConductorEvent.EntityType.WORKFLOW,
-                "corr-1",
-                "COMPLETED",
-                "COMPLETED",
-                executionId,
-                "2026-07-28T12:00:00.000Z",
-                "COMPLETED",
-                null,
-                "1.0",
-                List.of());
+    private TaskModel task(String id, String workflowId, String taskDefName) {
+        TaskModel task = new TaskModel();
+        task.setTaskId(id);
+        task.setWorkflowInstanceId(workflowId);
+        task.setTaskDefName(taskDefName);
+        task.setStatus(TaskModel.Status.COMPLETED);
+        return task;
     }
 
     @Test
-    void sendsRecordKeyedByGivenKeyToGivenTopic() throws Exception {
-        publisher.publish("my-topic", "key-1", "COMPLETED", event("exec-1"));
+    void publishesTaskCompletedEventToTheSharedTopic() throws Exception {
+        listener.onTaskCompleted(task("task-1", "wf-1", "test-task"));
 
         List<ProducerRecord<String, String>> history = mockProducer.history();
         assertEquals(1, history.size());
         ProducerRecord<String, String> record = history.get(0);
-        assertEquals("my-topic", record.topic());
-        assertEquals("key-1", record.key());
+        assertEquals("orchestration-workflow-events", record.topic());
+        assertEquals("task-1", record.key());
 
         JsonNode json = objectMapper.readTree(record.value());
-        assertEquals("exec-1", json.get("executionId").asText());
+        assertEquals("com.citi.grr.orchestration.service.async", json.get("namespace").asText());
+        assertEquals("COMPLETED", json.get("eventType").asText());
+        assertEquals("task-1", json.get("executionId").asText());
     }
 
     @Test
-    void doesNotThrowWhenSendFails() {
-        MockProducer<String, String> failingProducer =
-                new MockProducer<>(
-                        false, new StringSerializer(), new StringSerializer()); // manual completion
-        OrchestrationEventKafkaPublisher failingPublisher =
-                new OrchestrationEventKafkaPublisher(objectMapper, failingProducer);
+    void publishesTaskScheduledEvent() throws Exception {
+        listener.onTaskScheduled(task("task-2", "wf-1", "test-task"));
 
-        failingPublisher.publish("my-topic", "key-1", "COMPLETED", event("exec-1"));
-        failingProducer.errorNext(new RuntimeException("broker unavailable"));
-
-        assertTrue(true, "publish() must not propagate a send failure to the caller");
+        JsonNode json = objectMapper.readTree(mockProducer.history().get(0).value());
+        assertEquals("SCHEDULED", json.get("eventType").asText());
     }
 }

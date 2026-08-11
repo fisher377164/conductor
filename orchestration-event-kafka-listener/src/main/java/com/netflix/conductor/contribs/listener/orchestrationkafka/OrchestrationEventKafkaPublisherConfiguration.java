@@ -18,22 +18,40 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.netflix.conductor.contribs.tasks.kafka.KafkaProducerManager;
+import com.netflix.conductor.core.listener.TaskStatusListener;
 import com.netflix.conductor.core.listener.WorkflowStatusListener;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Configuration
 @EnableConfigurationProperties(OrchestrationEventKafkaPublisherProperties.class)
-@ConditionalOnProperty(
-        name = "conductor.workflow-status-listener.type",
-        havingValue = "orchestration-kafka")
 public class OrchestrationEventKafkaPublisherConfiguration {
 
     @Bean
+    @ConditionalOnProperty(
+            name = "conductor.workflow-status-listener.type",
+            havingValue = "orchestration-kafka")
     public WorkflowStatusListener getWorkflowStatusListener(
             OrchestrationEventKafkaPublisherProperties properties,
             ObjectMapper objectMapper,
             KafkaProducerManager kafkaProducerManager) {
-        return new OrchestrationEventKafkaPublisher(properties, objectMapper, kafkaProducerManager);
+        return new OrchestrationWorkflowStatusListener(
+                properties, objectMapper, kafkaProducerManager);
+    }
+
+    /**
+     * Independently gated by {@code conductor.task-status-listener.type}, so task tracking can be
+     * turned on without affecting the {@link #getWorkflowStatusListener} bean above (or vice
+     * versa).
+     */
+    @Bean
+    @ConditionalOnProperty(
+            name = "conductor.task-status-listener.type",
+            havingValue = "orchestration-kafka")
+    public TaskStatusListener getTaskStatusListener(
+            OrchestrationEventKafkaPublisherProperties properties,
+            ObjectMapper objectMapper,
+            KafkaProducerManager kafkaProducerManager) {
+        return new OrchestrationTaskStatusListener(properties, objectMapper, kafkaProducerManager);
     }
 }

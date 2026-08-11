@@ -1,3 +1,15 @@
+/*
+ * Copyright 2026 Conductor Authors.
+ * <p>
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 package com.netflix.conductor.contribs.listener.orchestrationkafka;
 
 import java.util.List;
@@ -5,7 +17,18 @@ import java.util.List;
 /** Outbound event message matching the CITI GRR Orchestration async Kafka schema. */
 public class ConductorEvent {
 
+    /**
+     * Distinguishes a workflow lifecycle event from a task status event. Both share one Kafka topic
+     * (see {@link OrchestrationEventKafkaPublisherProperties#getDefaultTopic()}), so consumers need
+     * this to tell the two apart without inspecting {@code messagePayload}.
+     */
+    public enum EntityType {
+        WORKFLOW,
+        TASK
+    }
+
     private final String namespace;
+    private final EntityType entityType;
     private final String correlationID;
     private final String eventType;
     private final String eventID;
@@ -18,6 +41,7 @@ public class ConductorEvent {
 
     public ConductorEvent(
             String namespace,
+            EntityType entityType,
             String correlationID,
             String eventType,
             String eventID,
@@ -28,6 +52,7 @@ public class ConductorEvent {
             String messageVersion,
             List<MessagePayloadEntry> messagePayload) {
         this.namespace = namespace;
+        this.entityType = entityType;
         this.correlationID = correlationID;
         this.eventType = eventType;
         this.eventID = eventID;
@@ -41,6 +66,10 @@ public class ConductorEvent {
 
     public String getNamespace() {
         return namespace;
+    }
+
+    public EntityType getEntityType() {
+        return entityType;
     }
 
     public String getCorrelationID() {

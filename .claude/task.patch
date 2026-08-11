@@ -1,0 +1,1510 @@
+Subject: [PATCH] task
+---
+Index: orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactory.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactory.java b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactory.java
+--- a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactory.java	(revision 95a99d33292a6ccc728dc62758b13cad8f76b92b)
++++ b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactory.java	(date 1786471002897)
+@@ -1,3 +1,15 @@
++/*
++ * Copyright 2026 Conductor Authors.
++ * <p>
++ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * <p>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p>
++ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
++ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
++ * specific language governing permissions and limitations under the License.
++ */
+ package com.netflix.conductor.contribs.listener.orchestrationkafka;
+ 
+ import java.time.Instant;
+@@ -8,14 +20,18 @@
+ import java.util.Set;
+ import java.util.function.Function;
+ 
++import com.netflix.conductor.common.run.TaskSummary;
+ import com.netflix.conductor.common.run.WorkflowSummary;
+ import com.netflix.conductor.common.run.WorkflowSummaryExtended;
++import com.netflix.conductor.contribs.listener.orchestrationkafka.ConductorEvent.EntityType;
+ import com.netflix.conductor.core.listener.WorkflowStatusListener.WorkflowEventType;
++import com.netflix.conductor.model.TaskModel;
+ import com.netflix.conductor.model.WorkflowModel;
+ 
+ /**
+- * Packs a workflow lifecycle event into the CITI GRR Orchestration {@link ConductorEvent} schema.
+- * Pure transformation, no I/O, so it can be unit tested without a Kafka broker.
++ * Packs a workflow lifecycle event or a task status event into the CITI GRR Orchestration {@link
++ * ConductorEvent} schema. Pure transformation, no I/O, so it can be unit tested without a Kafka
++ * broker.
+  */
+ public class ConductorEventFactory {
+ 
+@@ -28,41 +44,101 @@
+             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
+ 
+     /**
+-     * Builds the outbound message for the CITI GRR Orchestration schema. {@code eventType},
+-     * {@code eventID} and {@code status} all carry the same {@link WorkflowEventType} lifecycle
+-     * value; anything else useful for debugging goes into {@code messagePayload}, one entry per
+-     * {@link PayloadField}.
++     * Builds the outbound message for a workflow lifecycle event. {@code eventType} and {@code
++     * status} both carry the same {@link WorkflowEventType} lifecycle value; {@code eventID} and
++     * {@code executionId} both carry {@link WorkflowSummary#getWorkflowId()}. Anything else useful
++     * for debugging goes into {@code messagePayload}, one entry per {@link PayloadField}.
+      */
+     public ConductorEvent buildMessage(WorkflowEventType eventType, WorkflowModel workflow) {
+         WorkflowSummary workflowSummary = new WorkflowSummaryExtended(workflow.toWorkflow());
+-        String eventTypeName = eventType.name();
+         PayloadSource source = new PayloadSource(workflow, workflowSummary);
+ 
+-        List<MessagePayloadEntry> payload = new ArrayList<>();
+-        for (PayloadField field : PayloadField.values()) {
+-            addIfPresent(payload, field.fieldName(), field.extractValue(source));
+-        }
++        return buildEvent(
++                EntityType.WORKFLOW,
++                eventType.name(),
++                workflow.getCorrelationId(),
++                workflowSummary.getWorkflowId(),
++                workflow.getReasonForIncompletion(),
++                buildPayload(source, PayloadField.values()));
++    }
+ 
++    /**
++     * Builds the outbound message for a task status event, using the same CITI GRR Orchestration
++     * schema as {@link #buildMessage(WorkflowEventType, WorkflowModel)}. The task is the execution
++     * unit here, so {@code eventID}/{@code executionId} carry {@link TaskSummary#getTaskId()}
++     * rather than the workflow ID; the owning workflow's ID is included in {@code messagePayload}
++     * for correlation.
++     */
++    public ConductorEvent buildMessage(TaskModel.Status eventType, TaskModel task) {
++        TaskSummary taskSummary = new TaskSummary(task.toTask());
++        TaskPayloadSource source = new TaskPayloadSource(task, taskSummary);
++
++        return buildEvent(
++                EntityType.TASK,
++                eventType.name(),
++                task.getCorrelationId(),
++                taskSummary.getTaskId(),
++                task.getReasonForIncompletion(),
++                buildPayload(source, TaskPayloadField.values()));
++    }
++
++    /**
++     * Assembles the envelope shared by workflow and task events: {@code eventTypeName} fills both
++     * {@code eventType} and {@code status} (the same lifecycle value read two ways); {@code id}
++     * (the workflow/task ID taken from the caller's {@code WorkflowSummary}/{@code TaskSummary},
++     * never generated here) fills both {@code eventID} and {@code executionId}; {@code entityType}
++     * is what lets a consumer of the shared topic tell a workflow event from a task event.
++     */
++    private static ConductorEvent buildEvent(
++            EntityType entityType,
++            String eventTypeName,
++            String correlationId,
++            String id,
++            String reasonForIncompletion,
++            List<MessagePayloadEntry> payload) {
+         return new ConductorEvent(
+                 NAMESPACE,
+-                workflow.getCorrelationId(),
+-                eventTypeName,
++                entityType,
++                correlationId,
+                 eventTypeName,
+-                workflow.getWorkflowId(),
++                id,
++                id,
+                 TIMESTAMP_FORMATTER.format(Instant.now()),
+                 eventTypeName,
+-                workflow.getReasonForIncompletion(),
++                reasonForIncompletion,
+                 MESSAGE_VERSION,
+                 payload);
+     }
+ 
++    /** Runs {@code fields} over {@code source}, skipping any that extract to null/empty. */
++    private static <T> List<MessagePayloadEntry> buildPayload(T source, FieldSpec<T>[] fields) {
++        List<MessagePayloadEntry> payload = new ArrayList<>();
++        for (FieldSpec<T> field : fields) {
++            addIfPresent(payload, field.fieldName(), field.extractValue(source));
++        }
++        return payload;
++    }
++
+     private static void addIfPresent(List<MessagePayloadEntry> payload, String name, String value) {
+         if (value != null && !value.isEmpty()) {
+             payload.add(new MessagePayloadEntry(name, value));
+         }
+     }
+ 
+-    /** Bundles the raw workflow with its derived summary so {@link PayloadField} extractors can read from either. */
++    /**
++     * Common shape for {@link PayloadField} and {@link TaskPayloadField} so {@link #buildPayload}
++     * can run either.
++     */
++    private interface FieldSpec<T> {
++        String fieldName();
++
++        String extractValue(T source);
++    }
++
++    /**
++     * Bundles the raw workflow with its derived summary so {@link PayloadField} extractors can read
++     * from either.
++     */
+     private record PayloadSource(WorkflowModel workflow, WorkflowSummary summary) {
+ 
+         String getWorkflowName() {
+@@ -117,20 +193,23 @@
+         }
+     }
+ 
+-    /** Name/value-extractor pairs that make up {@link ConductorEvent#getMessagePayload()}. */
+-    private enum PayloadField {
+-        WORKFLOW_NAME("workflowName", wf -> wf.getWorkflowName()),
+-        VERSION("version", wf -> wf.getVersion()),
+-        START_TIME("startTime", wf -> wf.getStartTime()),
+-        END_TIME("endTime", wf -> wf.getEndTime()),
+-        UPDATE_TIME("updateTime", wf -> wf.getUpdateTime()),
+-        EXECUTION_TIME("executionTime", wf -> wf.getExecutionTime()),
+-        PRIORITY("priority", wf -> wf.getPriority()),
+-        CREATED_BY("createdBy", wf -> wf.getCreatedBy()),
+-        IDEMPOTENCY_KEY("idempotencyKey", wf -> wf.getIdempotencyKey()),
+-        FAILED_TASK_NAMES("failedTaskNames", wf -> wf.getFailedTaskNames()),
+-        INPUT("input", wf -> wf.getInput()),
+-        OUTPUT("output", wf -> wf.getOutput());
++    /**
++     * Name/value-extractor pairs that make up {@link ConductorEvent#getMessagePayload()} for
++     * workflow events.
++     */
++    private enum PayloadField implements FieldSpec<PayloadSource> {
++        WORKFLOW_NAME("workflowName", PayloadSource::getWorkflowName),
++        VERSION("version", PayloadSource::getVersion),
++        START_TIME("startTime", PayloadSource::getStartTime),
++        END_TIME("endTime", PayloadSource::getEndTime),
++        UPDATE_TIME("updateTime", PayloadSource::getUpdateTime),
++        EXECUTION_TIME("executionTime", PayloadSource::getExecutionTime),
++        PRIORITY("priority", PayloadSource::getPriority),
++        CREATED_BY("createdBy", PayloadSource::getCreatedBy),
++        IDEMPOTENCY_KEY("idempotencyKey", PayloadSource::getIdempotencyKey),
++        FAILED_TASK_NAMES("failedTaskNames", PayloadSource::getFailedTaskNames),
++        INPUT("input", PayloadSource::getInput),
++        OUTPUT("output", PayloadSource::getOutput);
+ 
+         private final String fieldName;
+         private final Function<PayloadSource, String> valueExtractor;
+@@ -140,11 +219,135 @@
+             this.valueExtractor = valueExtractor;
+         }
+ 
+-        String fieldName() {
++        @Override
++        public String fieldName() {
++            return fieldName;
++        }
++
++        @Override
++        public String extractValue(PayloadSource source) {
++            return valueExtractor.apply(source);
++        }
++    }
++
++    /**
++     * Bundles the raw task with its derived summary so {@link TaskPayloadField} extractors can read
++     * from either.
++     */
++    private record TaskPayloadSource(TaskModel task, TaskSummary summary) {
++
++        String getWorkflowId() {
++            return summary.getWorkflowId();
++        }
++
++        String getWorkflowType() {
++            return summary.getWorkflowType();
++        }
++
++        String getTaskType() {
++            return summary.getTaskType();
++        }
++
++        String getTaskDefName() {
++            return summary.getTaskDefName();
++        }
++
++        String getReferenceTaskName() {
++            return task.getReferenceTaskName();
++        }
++
++        String getScheduledTime() {
++            return summary.getScheduledTime();
++        }
++
++        String getStartTime() {
++            return summary.getStartTime();
++        }
++
++        String getEndTime() {
++            return summary.getEndTime();
++        }
++
++        String getUpdateTime() {
++            return summary.getUpdateTime();
++        }
++
++        String getExecutionTime() {
++            return task.getEndTime() > 0 ? String.valueOf(summary.getExecutionTime()) : null;
++        }
++
++        String getQueueWaitTime() {
++            return String.valueOf(summary.getQueueWaitTime());
++        }
++
++        String getWorkflowPriority() {
++            return String.valueOf(summary.getWorkflowPriority());
++        }
++
++        String getRetryCount() {
++            return String.valueOf(task.getRetryCount());
++        }
++
++        String getPollCount() {
++            return String.valueOf(task.getPollCount());
++        }
++
++        String getWorkerId() {
++            return task.getWorkerId();
++        }
++
++        String getDomain() {
++            return summary.getDomain();
++        }
++
++        String getInput() {
++            return summary.getInput();
++        }
++
++        String getOutput() {
++            return summary.getOutput();
++        }
++    }
++
++    /**
++     * Name/value-extractor pairs that make up {@link ConductorEvent#getMessagePayload()} for task
++     * events.
++     */
++    private enum TaskPayloadField implements FieldSpec<TaskPayloadSource> {
++        WORKFLOW_ID("workflowId", TaskPayloadSource::getWorkflowId),
++        WORKFLOW_TYPE("workflowType", TaskPayloadSource::getWorkflowType),
++        TASK_TYPE("taskType", TaskPayloadSource::getTaskType),
++        TASK_DEF_NAME("taskDefName", TaskPayloadSource::getTaskDefName),
++        REFERENCE_TASK_NAME("referenceTaskName", TaskPayloadSource::getReferenceTaskName),
++        SCHEDULED_TIME("scheduledTime", TaskPayloadSource::getScheduledTime),
++        START_TIME("startTime", TaskPayloadSource::getStartTime),
++        END_TIME("endTime", TaskPayloadSource::getEndTime),
++        UPDATE_TIME("updateTime", TaskPayloadSource::getUpdateTime),
++        EXECUTION_TIME("executionTime", TaskPayloadSource::getExecutionTime),
++        QUEUE_WAIT_TIME("queueWaitTime", TaskPayloadSource::getQueueWaitTime),
++        WORKFLOW_PRIORITY("workflowPriority", TaskPayloadSource::getWorkflowPriority),
++        RETRY_COUNT("retryCount", TaskPayloadSource::getRetryCount),
++        POLL_COUNT("pollCount", TaskPayloadSource::getPollCount),
++        WORKER_ID("workerId", TaskPayloadSource::getWorkerId),
++        DOMAIN("domain", TaskPayloadSource::getDomain),
++        INPUT("input", TaskPayloadSource::getInput),
++        OUTPUT("output", TaskPayloadSource::getOutput);
++
++        private final String fieldName;
++        private final Function<TaskPayloadSource, String> valueExtractor;
++
++        TaskPayloadField(String fieldName, Function<TaskPayloadSource, String> valueExtractor) {
++            this.fieldName = fieldName;
++            this.valueExtractor = valueExtractor;
++        }
++
++        @Override
++        public String fieldName() {
+             return fieldName;
+         }
+ 
+-        String extractValue(PayloadSource source) {
++        @Override
++        public String extractValue(TaskPayloadSource source) {
+             return valueExtractor.apply(source);
+         }
+     }
+Index: orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherTest.java b/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherTest.java
+--- a/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherTest.java	(revision 95a99d33292a6ccc728dc62758b13cad8f76b92b)
++++ b/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherTest.java	(date 1786467846205)
+@@ -13,127 +13,71 @@
+ package com.netflix.conductor.contribs.listener.orchestrationkafka;
+ 
+ import java.util.List;
+-import java.util.Map;
+ 
+ import org.apache.kafka.clients.producer.MockProducer;
+-import org.apache.kafka.clients.producer.Producer;
+-import org.apache.kafka.clients.producer.ProducerConfig;
+ import org.apache.kafka.clients.producer.ProducerRecord;
+ import org.apache.kafka.common.serialization.StringSerializer;
+ import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.Test;
+ 
+-import com.netflix.conductor.common.metadata.workflow.WorkflowDef;
+-import com.netflix.conductor.contribs.tasks.kafka.KafkaProducerManager;
+-import com.netflix.conductor.core.listener.WorkflowStatusListener.WorkflowEventType;
+-import com.netflix.conductor.model.WorkflowModel;
+-
+ import com.fasterxml.jackson.databind.JsonNode;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
+ import static org.junit.jupiter.api.Assertions.assertTrue;
+-import static org.mockito.ArgumentMatchers.anyMap;
+-import static org.mockito.Mockito.mock;
+-import static org.mockito.Mockito.when;
+ 
+ class OrchestrationEventKafkaPublisherTest {
+ 
+     private final ObjectMapper objectMapper = new ObjectMapper();
+     private MockProducer<String, String> mockProducer;
+-    private OrchestrationEventKafkaPublisher listener;
++    private OrchestrationEventKafkaPublisher publisher;
+ 
+     @BeforeEach
+     void setUp() {
+         mockProducer = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+-        OrchestrationEventKafkaPublisherProperties properties =
+-                new OrchestrationEventKafkaPublisherProperties();
+-        properties.setDefaultTopic("orchestration-workflow-events");
+-        listener = new OrchestrationEventKafkaPublisher(properties, objectMapper, mockProducer);
++        publisher = new OrchestrationEventKafkaPublisher(objectMapper, mockProducer);
+     }
+ 
+-    private WorkflowModel workflow(String id, String name) {
+-        WorkflowModel workflow = new WorkflowModel();
+-        workflow.setWorkflowId(id);
+-        workflow.setWorkflowDefinition(new WorkflowDef());
+-        workflow.getWorkflowDefinition().setName(name);
+-        return workflow;
++    private ConductorEvent event(String executionId) {
++        return new ConductorEvent(
++                "com.citi.grr.orchestration.service.async",
++                ConductorEvent.EntityType.WORKFLOW,
++                "corr-1",
++                "COMPLETED",
++                "COMPLETED",
++                executionId,
++                "2026-07-28T12:00:00.000Z",
++                "COMPLETED",
++                null,
++                "1.0",
++                List.of());
+     }
+ 
+     @Test
+-    void publishesWorkflowCompletedEvent() throws Exception {
+-        listener.onWorkflowCompleted(workflow("wf-1", "test-workflow"));
++    void sendsRecordKeyedByGivenKeyToGivenTopic() throws Exception {
++        publisher.publish("my-topic", "key-1", "COMPLETED", event("exec-1"));
+ 
+         List<ProducerRecord<String, String>> history = mockProducer.history();
+         assertEquals(1, history.size());
+         ProducerRecord<String, String> record = history.get(0);
+-        assertEquals("orchestration-workflow-events", record.topic());
+-        assertEquals("wf-1", record.key());
++        assertEquals("my-topic", record.topic());
++        assertEquals("key-1", record.key());
+ 
+         JsonNode json = objectMapper.readTree(record.value());
+-        assertEquals("com.citi.grr.orchestration.service.async", json.get("namespace").asText());
+-        assertEquals("COMPLETED", json.get("eventType").asText());
+-        assertEquals("wf-1", json.get("executionId").asText());
++        assertEquals("exec-1", json.get("executionId").asText());
+     }
+ 
+     @Test
+-    void publishesWorkflowTerminatedEvent() throws Exception {
+-        listener.onWorkflowTerminated(workflow("wf-2", "test-workflow"));
+-
+-        List<ProducerRecord<String, String>> history = mockProducer.history();
+-        assertEquals(1, history.size());
+-        JsonNode json = objectMapper.readTree(history.get(0).value());
+-        assertEquals("TERMINATED", json.get("eventType").asText());
+-        assertEquals("wf-2", json.get("executionId").asText());
+-    }
++    void doesNotThrowWhenSendFails() {
++        MockProducer<String, String> failingProducer =
++                new MockProducer<>(
++                        false, new StringSerializer(), new StringSerializer()); // manual completion
++        OrchestrationEventKafkaPublisher failingPublisher =
++                new OrchestrationEventKafkaPublisher(objectMapper, failingProducer);
+ 
+-    @Test
+-    void routesEventToPerEventTopicOverride() throws Exception {
+-        OrchestrationEventKafkaPublisherProperties properties =
+-                new OrchestrationEventKafkaPublisherProperties();
+-        properties.setDefaultTopic("orchestration-workflow-events");
+-        properties.setEventTopics(
+-                Map.of(WorkflowEventType.COMPLETED, "orchestration-workflow-completed"));
+-        OrchestrationEventKafkaPublisher overriddenListener =
+-                new OrchestrationEventKafkaPublisher(properties, objectMapper, mockProducer);
++        failingPublisher.publish("my-topic", "key-1", "COMPLETED", event("exec-1"));
++        failingProducer.errorNext(new RuntimeException("broker unavailable"));
+ 
+-        overriddenListener.onWorkflowCompleted(workflow("wf-3", "test-workflow"));
+-
+-        assertEquals("orchestration-workflow-completed", mockProducer.history().get(0).topic());
+-    }
+-
+-    @Test
+-    void usesKafkaProducerManagerAsProducerSource() {
+-        KafkaProducerManager kafkaProducerManager = mock(KafkaProducerManager.class);
+-        Producer<String, String> managedProducer = mockProducer;
+-        when(kafkaProducerManager.getProducerForOverrides(anyMap())).thenReturn(managedProducer);
+-
+-        OrchestrationEventKafkaPublisherProperties properties =
+-                new OrchestrationEventKafkaPublisherProperties();
+-        properties.setDefaultTopic("orchestration-workflow-events");
+-        properties.setProducer(
+-                Map.of(ProducerConfig.CLIENT_ID_CONFIG, "orchestration-event-kafka-publisher"));
+-
+-        OrchestrationEventKafkaPublisher managedListener =
+-                new OrchestrationEventKafkaPublisher(
+-                        properties, objectMapper, kafkaProducerManager);
+-        managedListener.onWorkflowCompleted(workflow("wf-5", "test-workflow"));
+-
+-        assertEquals(1, mockProducer.history().size());
+-    }
+-
+-    @Test
+-    void skipsEventsNotInSubscribedList() {
+-        OrchestrationEventKafkaPublisherProperties properties =
+-                new OrchestrationEventKafkaPublisherProperties();
+-        properties.setSubscribedEvents(List.of(WorkflowEventType.COMPLETED));
+-        OrchestrationEventKafkaPublisher completedOnlyListener =
+-                new OrchestrationEventKafkaPublisher(properties, objectMapper, mockProducer);
+-
+-        completedOnlyListener.onWorkflowStarted(workflow("wf-4", "test-workflow"));
+-
+-        assertTrue(
+-                mockProducer.history().isEmpty(),
+-                "STARTED should not be published when only COMPLETED is subscribed");
++        assertTrue(true, "publish() must not propagate a send failure to the caller");
+     }
+ }
+Index: orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationTaskStatusListener.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationTaskStatusListener.java b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationTaskStatusListener.java
+new file mode 100644
+--- /dev/null	(date 1786466780392)
++++ b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationTaskStatusListener.java	(date 1786466780392)
+@@ -0,0 +1,103 @@
++/*
++ * Copyright 2026 Conductor Authors.
++ * <p>
++ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * <p>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p>
++ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
++ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
++ * specific language governing permissions and limitations under the License.
++ */
++package com.netflix.conductor.contribs.listener.orchestrationkafka;
++
++import com.netflix.conductor.contribs.tasks.kafka.KafkaProducerManager;
++import com.netflix.conductor.core.listener.TaskStatusListener;
++import com.netflix.conductor.model.TaskModel;
++
++import com.fasterxml.jackson.databind.ObjectMapper;
++
++/**
++ * Publishes task status changes, packed as {@link ConductorEvent}, to a Kafka topic — the same
++ * topic {@link OrchestrationWorkflowStatusListener} uses, see {@code default-topic} in {@link
++ * OrchestrationEventKafkaPublisherProperties}.
++ */
++public class OrchestrationTaskStatusListener implements TaskStatusListener {
++
++    private final OrchestrationEventKafkaPublisherProperties properties;
++    private final ConductorEventFactory eventFactory;
++    private final OrchestrationEventKafkaPublisher publisher;
++
++    public OrchestrationTaskStatusListener(
++            OrchestrationEventKafkaPublisherProperties properties,
++            ObjectMapper objectMapper,
++            KafkaProducerManager kafkaProducerManager) {
++        this(
++                properties,
++                new OrchestrationEventKafkaPublisher(
++                        properties, objectMapper, kafkaProducerManager));
++    }
++
++    /**
++     * Visible for tests, so a publisher backed by a {@code MockProducer} can be injected directly.
++     */
++    OrchestrationTaskStatusListener(
++            OrchestrationEventKafkaPublisherProperties properties,
++            OrchestrationEventKafkaPublisher publisher) {
++        this.properties = properties;
++        this.eventFactory = new ConductorEventFactory();
++        this.publisher = publisher;
++    }
++
++    @Override
++    public void onTaskScheduled(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.SCHEDULED, task);
++    }
++
++    @Override
++    public void onTaskInProgress(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.IN_PROGRESS, task);
++    }
++
++    @Override
++    public void onTaskCanceled(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.CANCELED, task);
++    }
++
++    @Override
++    public void onTaskFailed(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.FAILED, task);
++    }
++
++    @Override
++    public void onTaskFailedWithTerminalError(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.FAILED_WITH_TERMINAL_ERROR, task);
++    }
++
++    @Override
++    public void onTaskCompleted(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.COMPLETED, task);
++    }
++
++    @Override
++    public void onTaskCompletedWithErrors(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.COMPLETED_WITH_ERRORS, task);
++    }
++
++    @Override
++    public void onTaskTimedOut(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.TIMED_OUT, task);
++    }
++
++    @Override
++    public void onTaskSkipped(TaskModel task) {
++        publishTaskEvent(TaskModel.Status.SKIPPED, task);
++    }
++
++    private void publishTaskEvent(TaskModel.Status eventType, TaskModel task) {
++        ConductorEvent message = eventFactory.buildMessage(eventType, task);
++        publisher.publish(
++                properties.getDefaultTopic(), task.getTaskId(), eventType.name(), message);
++    }
++}
+Index: orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationTaskStatusListenerTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationTaskStatusListenerTest.java b/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationTaskStatusListenerTest.java
+new file mode 100644
+--- /dev/null	(date 1786466780413)
++++ b/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationTaskStatusListenerTest.java	(date 1786466780413)
+@@ -0,0 +1,80 @@
++/*
++ * Copyright 2026 Conductor Authors.
++ * <p>
++ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * <p>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p>
++ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
++ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
++ * specific language governing permissions and limitations under the License.
++ */
++package com.netflix.conductor.contribs.listener.orchestrationkafka;
++
++import java.util.List;
++
++import org.apache.kafka.clients.producer.MockProducer;
++import org.apache.kafka.clients.producer.ProducerRecord;
++import org.apache.kafka.common.serialization.StringSerializer;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++import com.netflix.conductor.model.TaskModel;
++
++import com.fasterxml.jackson.databind.JsonNode;
++import com.fasterxml.jackson.databind.ObjectMapper;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++
++class OrchestrationTaskStatusListenerTest {
++
++    private final ObjectMapper objectMapper = new ObjectMapper();
++    private MockProducer<String, String> mockProducer;
++    private OrchestrationTaskStatusListener listener;
++
++    @BeforeEach
++    void setUp() {
++        mockProducer = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
++        OrchestrationEventKafkaPublisherProperties properties =
++                new OrchestrationEventKafkaPublisherProperties();
++        properties.setDefaultTopic("orchestration-workflow-events");
++        listener =
++                new OrchestrationTaskStatusListener(
++                        properties,
++                        new OrchestrationEventKafkaPublisher(objectMapper, mockProducer));
++    }
++
++    private TaskModel task(String id, String workflowId, String taskDefName) {
++        TaskModel task = new TaskModel();
++        task.setTaskId(id);
++        task.setWorkflowInstanceId(workflowId);
++        task.setTaskDefName(taskDefName);
++        task.setStatus(TaskModel.Status.COMPLETED);
++        return task;
++    }
++
++    @Test
++    void publishesTaskCompletedEventToTheSharedTopic() throws Exception {
++        listener.onTaskCompleted(task("task-1", "wf-1", "test-task"));
++
++        List<ProducerRecord<String, String>> history = mockProducer.history();
++        assertEquals(1, history.size());
++        ProducerRecord<String, String> record = history.get(0);
++        assertEquals("orchestration-workflow-events", record.topic());
++        assertEquals("task-1", record.key());
++
++        JsonNode json = objectMapper.readTree(record.value());
++        assertEquals("com.citi.grr.orchestration.service.async", json.get("namespace").asText());
++        assertEquals("COMPLETED", json.get("eventType").asText());
++        assertEquals("task-1", json.get("executionId").asText());
++    }
++
++    @Test
++    void publishesTaskScheduledEvent() throws Exception {
++        listener.onTaskScheduled(task("task-2", "wf-1", "test-task"));
++
++        JsonNode json = objectMapper.readTree(mockProducer.history().get(0).value());
++        assertEquals("SCHEDULED", json.get("eventType").asText());
++    }
++}
+Index: orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationWorkflowStatusListenerTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationWorkflowStatusListenerTest.java b/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationWorkflowStatusListenerTest.java
+new file mode 100644
+--- /dev/null	(date 1786466780405)
++++ b/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationWorkflowStatusListenerTest.java	(date 1786466780405)
+@@ -0,0 +1,146 @@
++/*
++ * Copyright 2026 Conductor Authors.
++ * <p>
++ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * <p>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p>
++ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
++ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
++ * specific language governing permissions and limitations under the License.
++ */
++package com.netflix.conductor.contribs.listener.orchestrationkafka;
++
++import java.util.List;
++import java.util.Map;
++
++import org.apache.kafka.clients.producer.MockProducer;
++import org.apache.kafka.clients.producer.Producer;
++import org.apache.kafka.clients.producer.ProducerConfig;
++import org.apache.kafka.clients.producer.ProducerRecord;
++import org.apache.kafka.common.serialization.StringSerializer;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++import com.netflix.conductor.common.metadata.workflow.WorkflowDef;
++import com.netflix.conductor.contribs.tasks.kafka.KafkaProducerManager;
++import com.netflix.conductor.core.listener.WorkflowStatusListener.WorkflowEventType;
++import com.netflix.conductor.model.WorkflowModel;
++
++import com.fasterxml.jackson.databind.JsonNode;
++import com.fasterxml.jackson.databind.ObjectMapper;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.ArgumentMatchers.anyMap;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++class OrchestrationWorkflowStatusListenerTest {
++
++    private final ObjectMapper objectMapper = new ObjectMapper();
++    private MockProducer<String, String> mockProducer;
++    private OrchestrationWorkflowStatusListener listener;
++
++    @BeforeEach
++    void setUp() {
++        mockProducer = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
++        OrchestrationEventKafkaPublisherProperties properties =
++                new OrchestrationEventKafkaPublisherProperties();
++        properties.setDefaultTopic("orchestration-workflow-events");
++        listener =
++                new OrchestrationWorkflowStatusListener(
++                        properties,
++                        new OrchestrationEventKafkaPublisher(objectMapper, mockProducer));
++    }
++
++    private WorkflowModel workflow(String id, String name) {
++        WorkflowModel workflow = new WorkflowModel();
++        workflow.setWorkflowId(id);
++        workflow.setWorkflowDefinition(new WorkflowDef());
++        workflow.getWorkflowDefinition().setName(name);
++        return workflow;
++    }
++
++    @Test
++    void publishesWorkflowCompletedEvent() throws Exception {
++        listener.onWorkflowCompleted(workflow("wf-1", "test-workflow"));
++
++        List<ProducerRecord<String, String>> history = mockProducer.history();
++        assertEquals(1, history.size());
++        ProducerRecord<String, String> record = history.get(0);
++        assertEquals("orchestration-workflow-events", record.topic());
++        assertEquals("wf-1", record.key());
++
++        JsonNode json = objectMapper.readTree(record.value());
++        assertEquals("com.citi.grr.orchestration.service.async", json.get("namespace").asText());
++        assertEquals("COMPLETED", json.get("eventType").asText());
++        assertEquals("wf-1", json.get("executionId").asText());
++    }
++
++    @Test
++    void publishesWorkflowTerminatedEvent() throws Exception {
++        listener.onWorkflowTerminated(workflow("wf-2", "test-workflow"));
++
++        List<ProducerRecord<String, String>> history = mockProducer.history();
++        assertEquals(1, history.size());
++        JsonNode json = objectMapper.readTree(history.get(0).value());
++        assertEquals("TERMINATED", json.get("eventType").asText());
++        assertEquals("wf-2", json.get("executionId").asText());
++    }
++
++    @Test
++    void routesEventToPerEventTopicOverride() throws Exception {
++        OrchestrationEventKafkaPublisherProperties properties =
++                new OrchestrationEventKafkaPublisherProperties();
++        properties.setDefaultTopic("orchestration-workflow-events");
++        properties.setEventTopics(
++                Map.of(WorkflowEventType.COMPLETED, "orchestration-workflow-completed"));
++        OrchestrationWorkflowStatusListener overriddenListener =
++                new OrchestrationWorkflowStatusListener(
++                        properties,
++                        new OrchestrationEventKafkaPublisher(objectMapper, mockProducer));
++
++        overriddenListener.onWorkflowCompleted(workflow("wf-3", "test-workflow"));
++
++        assertEquals("orchestration-workflow-completed", mockProducer.history().get(0).topic());
++    }
++
++    @Test
++    void usesKafkaProducerManagerAsProducerSource() {
++        KafkaProducerManager kafkaProducerManager = mock(KafkaProducerManager.class);
++        Producer<String, String> managedProducer = mockProducer;
++        when(kafkaProducerManager.getProducerForOverrides(anyMap())).thenReturn(managedProducer);
++
++        OrchestrationEventKafkaPublisherProperties properties =
++                new OrchestrationEventKafkaPublisherProperties();
++        properties.setDefaultTopic("orchestration-workflow-events");
++        properties.setProducer(
++                Map.of(ProducerConfig.CLIENT_ID_CONFIG, "orchestration-event-kafka-publisher"));
++
++        OrchestrationWorkflowStatusListener managedListener =
++                new OrchestrationWorkflowStatusListener(
++                        properties, objectMapper, kafkaProducerManager);
++        managedListener.onWorkflowCompleted(workflow("wf-5", "test-workflow"));
++
++        assertEquals(1, mockProducer.history().size());
++    }
++
++    @Test
++    void skipsEventsNotInSubscribedList() {
++        OrchestrationEventKafkaPublisherProperties properties =
++                new OrchestrationEventKafkaPublisherProperties();
++        properties.setSubscribedEvents(List.of(WorkflowEventType.COMPLETED));
++        OrchestrationWorkflowStatusListener completedOnlyListener =
++                new OrchestrationWorkflowStatusListener(
++                        properties,
++                        new OrchestrationEventKafkaPublisher(objectMapper, mockProducer));
++
++        completedOnlyListener.onWorkflowStarted(workflow("wf-4", "test-workflow"));
++
++        assertTrue(
++                mockProducer.history().isEmpty(),
++                "STARTED should not be published when only COMPLETED is subscribed");
++    }
++}
+Index: orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactoryTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactoryTest.java b/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactoryTest.java
+--- a/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactoryTest.java	(revision 95a99d33292a6ccc728dc62758b13cad8f76b92b)
++++ b/orchestration-event-kafka-listener/src/test/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEventFactoryTest.java	(date 1786470959804)
+@@ -1,9 +1,22 @@
++/*
++ * Copyright 2026 Conductor Authors.
++ * <p>
++ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * <p>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p>
++ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
++ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
++ * specific language governing permissions and limitations under the License.
++ */
+ package com.netflix.conductor.contribs.listener.orchestrationkafka;
+ 
+ import org.junit.jupiter.api.Test;
+ 
+ import com.netflix.conductor.common.metadata.workflow.WorkflowDef;
+ import com.netflix.conductor.core.listener.WorkflowStatusListener.WorkflowEventType;
++import com.netflix.conductor.model.TaskModel;
+ import com.netflix.conductor.model.WorkflowModel;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
+@@ -24,9 +37,10 @@
+         ConductorEvent event = factory.buildMessage(WorkflowEventType.COMPLETED, workflow);
+ 
+         assertEquals("com.citi.grr.orchestration.service.async", event.getNamespace());
++        assertEquals(ConductorEvent.EntityType.WORKFLOW, event.getEntityType());
+         assertEquals("corr-1", event.getCorrelationID());
+         assertEquals("COMPLETED", event.getEventType());
+-        assertEquals("COMPLETED", event.getEventID());
++        assertEquals("wf-1", event.getEventID());
+         assertEquals("COMPLETED", event.getStatus());
+         assertEquals("wf-1", event.getExecutionId());
+         assertTrue(
+@@ -37,6 +51,40 @@
+                                                 && "test-workflow".equals(entry.getValue())));
+     }
+ 
++    @Test
++    void buildsMessageFromTask() {
++        TaskModel task = new TaskModel();
++        task.setTaskId("task-1");
++        task.setCorrelationId("corr-1");
++        task.setWorkflowInstanceId("wf-1");
++        task.setTaskDefName("test-task");
++        task.setTaskType("SIMPLE");
++        task.setReferenceTaskName("test-task-ref");
++        task.setStatus(TaskModel.Status.COMPLETED);
++
++        ConductorEvent event = factory.buildMessage(TaskModel.Status.COMPLETED, task);
++
++        assertEquals("com.citi.grr.orchestration.service.async", event.getNamespace());
++        assertEquals(ConductorEvent.EntityType.TASK, event.getEntityType());
++        assertEquals("corr-1", event.getCorrelationID());
++        assertEquals("COMPLETED", event.getEventType());
++        assertEquals("task-1", event.getEventID());
++        assertEquals("COMPLETED", event.getStatus());
++        assertEquals("task-1", event.getExecutionId());
++        assertTrue(
++                event.getMessagePayload().stream()
++                        .anyMatch(
++                                entry ->
++                                        "taskDefName".equals(entry.getName())
++                                                && "test-task".equals(entry.getValue())));
++        assertTrue(
++                event.getMessagePayload().stream()
++                        .anyMatch(
++                                entry ->
++                                        "workflowId".equals(entry.getName())
++                                                && "wf-1".equals(entry.getValue())));
++    }
++
+     @Test
+     void omitsExecutionTimeUntilWorkflowEnds() {
+         WorkflowModel workflow = new WorkflowModel();
+Index: orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationWorkflowStatusListener.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationWorkflowStatusListener.java b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationWorkflowStatusListener.java
+new file mode 100644
+--- /dev/null	(date 1786466780383)
++++ b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationWorkflowStatusListener.java	(date 1786466780383)
+@@ -0,0 +1,107 @@
++/*
++ * Copyright 2026 Conductor Authors.
++ * <p>
++ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * <p>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p>
++ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
++ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
++ * specific language governing permissions and limitations under the License.
++ */
++package com.netflix.conductor.contribs.listener.orchestrationkafka;
++
++import java.util.Set;
++
++import com.netflix.conductor.contribs.tasks.kafka.KafkaProducerManager;
++import com.netflix.conductor.core.listener.WorkflowStatusListener;
++import com.netflix.conductor.model.WorkflowModel;
++
++import com.fasterxml.jackson.databind.ObjectMapper;
++
++/** Publishes workflow lifecycle events, packed as {@link ConductorEvent}, to a Kafka topic. */
++public class OrchestrationWorkflowStatusListener implements WorkflowStatusListener {
++
++    private final OrchestrationEventKafkaPublisherProperties properties;
++    private final ConductorEventFactory eventFactory;
++    private final OrchestrationEventKafkaPublisher publisher;
++    private final Set<WorkflowEventType> subscribedEvents;
++
++    public OrchestrationWorkflowStatusListener(
++            OrchestrationEventKafkaPublisherProperties properties,
++            ObjectMapper objectMapper,
++            KafkaProducerManager kafkaProducerManager) {
++        this(
++                properties,
++                new OrchestrationEventKafkaPublisher(
++                        properties, objectMapper, kafkaProducerManager));
++    }
++
++    /**
++     * Visible for tests, so a publisher backed by a {@code MockProducer} can be injected directly.
++     */
++    OrchestrationWorkflowStatusListener(
++            OrchestrationEventKafkaPublisherProperties properties,
++            OrchestrationEventKafkaPublisher publisher) {
++        this.properties = properties;
++        this.eventFactory = new ConductorEventFactory();
++        this.publisher = publisher;
++        this.subscribedEvents = Set.copyOf(properties.getSubscribedEvents());
++    }
++
++    @Override
++    public void onWorkflowStarted(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.STARTED, workflow);
++    }
++
++    @Override
++    public void onWorkflowRestarted(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.RESTARTED, workflow);
++    }
++
++    @Override
++    public void onWorkflowRerun(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.RERAN, workflow);
++    }
++
++    @Override
++    public void onWorkflowRetried(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.RETRIED, workflow);
++    }
++
++    @Override
++    public void onWorkflowPaused(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.PAUSED, workflow);
++    }
++
++    @Override
++    public void onWorkflowResumed(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.RESUMED, workflow);
++    }
++
++    @Override
++    public void onWorkflowCompleted(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.COMPLETED, workflow);
++    }
++
++    @Override
++    public void onWorkflowTerminated(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.TERMINATED, workflow);
++    }
++
++    @Override
++    public void onWorkflowFinalized(WorkflowModel workflow) {
++        publishEvent(WorkflowEventType.FINALIZED, workflow);
++    }
++
++    private void publishEvent(WorkflowEventType eventType, WorkflowModel workflow) {
++        if (!subscribedEvents.contains(eventType)) {
++            return;
++        }
++        ConductorEvent message = eventFactory.buildMessage(eventType, workflow);
++        String topic =
++                properties.getEventTopics().getOrDefault(eventType, properties.getDefaultTopic());
++        publisher.publish(topic, workflow.getWorkflowId(), eventType.name(), message);
++    }
++}
+Index: orchestration-event-kafka-listener/README.md
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/README.md b/orchestration-event-kafka-listener/README.md
+--- a/orchestration-event-kafka-listener/README.md	(revision 95a99d33292a6ccc728dc62758b13cad8f76b92b)
++++ b/orchestration-event-kafka-listener/README.md	(date 1786470992503)
+@@ -1,9 +1,23 @@
+ # Orchestration Event Kafka Listener (orchestration-kafka)
+ 
+-Intercepts workflow lifecycle events, packs them into the CITI GRR Orchestration `ConductorEvent`
+-schema, and publishes them to Kafka — independently of the existing `kafka` listener type in
+-`conductor-workflow-event-listener` (which publishes a different, simpler JSON shape) and of the
+-`workflow_publisher` (webhook) listener in that same module.
++Intercepts workflow lifecycle events and task status changes, packs them into the CITI GRR
++Orchestration `ConductorEvent` schema, and publishes them to Kafka — independently of the existing
++`kafka` listener type in `conductor-workflow-event-listener` (which publishes a different, simpler
++JSON shape) and of the `workflow_publisher` (webhook) listener in that same module.
++
++Three classes split the work by responsibility:
++
++- `OrchestrationWorkflowStatusListener implements WorkflowStatusListener` — workflow lifecycle
++  events only.
++- `OrchestrationTaskStatusListener implements TaskStatusListener` — task status changes only.
++- `OrchestrationEventKafkaPublisher` — shared delivery: serializes a `ConductorEvent` and sends it,
++  logging success/failure. It implements neither listener interface itself; both listener classes
++  hold one as a collaborator so the send/log/error-handling logic isn't duplicated between them.
++
++Each listener is registered as its own Spring bean (see `OrchestrationEventKafkaPublisherConfiguration`),
++gated by its own property, so either can be turned on independently — including both at once, since
++neither class implements the other's interface. Both publish to the same topic (see `default-topic`
++below) — there is no separate task topic or task-specific subscription filter.
+ 
+ ## Published Artifacts
+ 
+@@ -38,16 +52,31 @@
+ [`WorkflowStatusListener.WorkflowEventType`](../core/src/main/java/com/netflix/conductor/core/listener/WorkflowStatusListener.java):
+ `STARTED`, `RERAN`, `RETRIED`, `PAUSED`, `RESUMED`, `RESTARTED`, `COMPLETED`, `TERMINATED`, `FINALIZED`.
+ 
++To also publish task status changes:
++
++```properties
++conductor.task-status-listener.type=orchestration-kafka
++```
++
++Task events publish unconditionally (all statuses, no per-status subscription filter) to the same
++`conductor.workflow-status-listener.orchestration-kafka.default-topic` as workflow events — there
++is no separate task topic or task-specific `event-topics` override. The `producer`/`default-topic`
++keys stay under the `workflow-status-listener.orchestration-kafka` prefix regardless of which
++listener role is active, since both share one `OrchestrationEventKafkaPublisherProperties` bean.
++
+ ## Message key and payload
+ 
++### Workflow events
++
+ Each Kafka record is keyed by the workflow ID, with a JSON value shaped like:
+ 
+ ```json
+ {
+   "namespace": "com.citi.grr.orchestration.service.async",
++  "entityType": "WORKFLOW",
+   "correlationID": "...",
+   "eventType": "COMPLETED",
+-  "eventID": "COMPLETED",
++  "eventID": "3c9c1fd2-...",
+   "executionId": "3c9c1fd2-...",
+   "eventTimeStamp": "2026-07-28T12:00:00.000Z",
+   "status": "COMPLETED",
+@@ -61,13 +90,44 @@
+ ```
+ 
+ `namespace` is a fixed value the downstream CITI GRR Orchestration layer filters on; it is not
+-configurable per-deployment.
++configurable per-deployment. `entityType` (`WORKFLOW` or `TASK`) is what lets a consumer reading the
++shared topic tell the two event kinds apart without inspecting `messagePayload`. `eventType` and
++`status` both carry the same lifecycle value (e.g. `COMPLETED`); `eventID` and `executionId` both
++carry the workflow's own ID, read from `WorkflowSummary#getWorkflowId()` — never generated locally.
++
++### Task events
+ 
+-`ConductorEventFactory` builds this message from a `WorkflowModel` with no I/O involved, so it's
+-unit tested independently of Kafka (`ConductorEventFactoryTest`). `OrchestrationEventKafkaPublisher`
+-owns only delivery, not producer lifecycle, and accepts an injected `Producer<String, String>` so
+-tests can substitute `org.apache.kafka.clients.producer.MockProducer` instead of a real broker
+-(`OrchestrationEventKafkaPublisherTest`).
++Each Kafka record is keyed by the task ID, with a JSON value in the same shape — `eventID` and
++`executionId` both carry `TaskSummary#getTaskId()` here rather than the workflow ID; the owning
++workflow's ID is carried in `messagePayload` (`workflowId`) for correlation:
++
++```json
++{
++  "namespace": "com.citi.grr.orchestration.service.async",
++  "entityType": "TASK",
++  "correlationID": "...",
++  "eventType": "COMPLETED",
++  "eventID": "8f3a2e10-...",
++  "executionId": "8f3a2e10-...",
++  "eventTimeStamp": "2026-07-28T12:00:00.000Z",
++  "status": "COMPLETED",
++  "statusMessage": null,
++  "messageVersion": "1.0",
++  "messagePayload": [
++    { "name": "workflowId", "value": "3c9c1fd2-..." },
++    { "name": "taskDefName", "value": "my_task" },
++    { "name": "taskType", "value": "SIMPLE" }
++  ]
++}
++```
++
++`ConductorEventFactory` builds both message shapes — from a `WorkflowModel` or a `TaskModel` — with
++no I/O involved, so it's unit tested independently of Kafka (`ConductorEventFactoryTest`).
++`OrchestrationEventKafkaPublisher` owns only delivery, not producer lifecycle, and accepts an
++injected `Producer<String, String>` so tests can substitute
++`org.apache.kafka.clients.producer.MockProducer` instead of a real broker
++(`OrchestrationEventKafkaPublisherTest`, `OrchestrationWorkflowStatusListenerTest`,
++`OrchestrationTaskStatusListenerTest`).
+ 
+ ## Producer configuration
+ 
+@@ -84,8 +144,15 @@
+ 
+ ## Running alongside other listeners
+ 
+-`conductor.workflow-status-listener.type` selects a single listener bean. To run
+-`orchestration-kafka` alongside e.g. archiving or the internal queue publisher, use the `composite`
+-listener type from `conductor-workflow-event-listener` and add `orchestration-kafka` to
+-`conductor.workflow-status-listener.composite.types` (requires registering `orchestration-kafka` as
+-a case in that module's `WorkflowStatusListenerFactory`).
++`conductor.workflow-status-listener.type` and `conductor.task-status-listener.type` each select a
++single listener bean of their respective type — one for workflows, one for tasks — so
++`orchestration-kafka` can be the workflow listener, the task listener, or both, independently of
++each other.
++
++To run `orchestration-kafka` alongside another *workflow* listener, e.g. archiving or the internal
++queue publisher, use the `composite` listener type from `conductor-workflow-event-listener` and add
++`orchestration-kafka` to `conductor.workflow-status-listener.composite.types` (requires registering
++`orchestration-kafka` as a case in that module's `WorkflowStatusListenerFactory`). There is no
++equivalent `composite` mechanism for `conductor.task-status-listener.type`, so `orchestration-kafka`
++cannot currently run alongside another *task* listener (e.g. `task-status-listener`'s
++`task_publisher`) — only one task listener bean can be active at a time.
+Index: orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEvent.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEvent.java b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEvent.java
+--- a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEvent.java	(revision 95a99d33292a6ccc728dc62758b13cad8f76b92b)
++++ b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/ConductorEvent.java	(date 1786467766948)
+@@ -1,3 +1,15 @@
++/*
++ * Copyright 2026 Conductor Authors.
++ * <p>
++ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ * <p>
++ * http://www.apache.org/licenses/LICENSE-2.0
++ * <p>
++ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
++ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
++ * specific language governing permissions and limitations under the License.
++ */
+ package com.netflix.conductor.contribs.listener.orchestrationkafka;
+ 
+ import java.util.List;
+@@ -5,7 +17,18 @@
+ /** Outbound event message matching the CITI GRR Orchestration async Kafka schema. */
+ public class ConductorEvent {
+ 
++    /**
++     * Distinguishes a workflow lifecycle event from a task status event. Both share one Kafka topic
++     * (see {@link OrchestrationEventKafkaPublisherProperties#getDefaultTopic()}), so consumers need
++     * this to tell the two apart without inspecting {@code messagePayload}.
++     */
++    public enum EntityType {
++        WORKFLOW,
++        TASK
++    }
++
+     private final String namespace;
++    private final EntityType entityType;
+     private final String correlationID;
+     private final String eventType;
+     private final String eventID;
+@@ -18,6 +41,7 @@
+ 
+     public ConductorEvent(
+             String namespace,
++            EntityType entityType,
+             String correlationID,
+             String eventType,
+             String eventID,
+@@ -28,6 +52,7 @@
+             String messageVersion,
+             List<MessagePayloadEntry> messagePayload) {
+         this.namespace = namespace;
++        this.entityType = entityType;
+         this.correlationID = correlationID;
+         this.eventType = eventType;
+         this.eventID = eventID;
+@@ -43,6 +68,10 @@
+         return namespace;
+     }
+ 
++    public EntityType getEntityType() {
++        return entityType;
++    }
++
+     public String getCorrelationID() {
+         return correlationID;
+     }
+Index: orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisher.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisher.java b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisher.java
+--- a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisher.java	(revision 95a99d33292a6ccc728dc62758b13cad8f76b92b)
++++ b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisher.java	(date 1786466780358)
+@@ -12,134 +12,75 @@
+  */
+ package com.netflix.conductor.contribs.listener.orchestrationkafka;
+ 
+-import java.util.Set;
+-
+ import org.apache.kafka.clients.producer.Producer;
+ import org.apache.kafka.clients.producer.ProducerRecord;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
+ import com.netflix.conductor.contribs.tasks.kafka.KafkaProducerManager;
+-import com.netflix.conductor.core.listener.WorkflowStatusListener;
+-import com.netflix.conductor.model.WorkflowModel;
+ 
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ 
+-/** Publishes workflow lifecycle events, packed as {@link ConductorEvent}, to a Kafka topic. */
+-public class OrchestrationEventKafkaPublisher implements WorkflowStatusListener {
++/**
++ * Delivers a {@link ConductorEvent} to Kafka: serializes it and sends it, logging the outcome.
++ * Shared by {@link OrchestrationWorkflowStatusListener} and {@link OrchestrationTaskStatusListener}
++ * so the send/log/error-handling logic isn't duplicated between the two listener types; it has no
++ * notion of workflows or tasks itself, only of publishing a keyed record to a topic.
++ */
++public class OrchestrationEventKafkaPublisher {
+ 
+     private static final Logger LOGGER =
+             LoggerFactory.getLogger(OrchestrationEventKafkaPublisher.class);
+ 
+-    private final OrchestrationEventKafkaPublisherProperties properties;
+     private final ObjectMapper objectMapper;
+     private final Producer<String, String> producer;
+-    private final ConductorEventFactory eventFactory;
+-    private final Set<WorkflowEventType> subscribedEvents;
+ 
+     /**
+-     * Producer comes from the shared {@link KafkaProducerManager}, so this listener picks up the
+-     * same globally-configured broker/SSL settings as the kafka-publish task, layering its own
+-     * {@link OrchestrationEventKafkaPublisherProperties#getProducer() producer} overrides on top.
+-     * The manager owns the producer's lifecycle (shared cache, eviction), so this listener does not
+-     * close it itself.
++     * Producer comes from the shared {@link KafkaProducerManager}, so callers pick up the same
++     * globally-configured broker/SSL settings as the kafka-publish task, layering their own {@link
++     * OrchestrationEventKafkaPublisherProperties#getProducer() producer} overrides on top. The
++     * manager owns the producer's lifecycle (shared cache, eviction), so this class does not close
++     * it itself.
+      */
+     public OrchestrationEventKafkaPublisher(
+             OrchestrationEventKafkaPublisherProperties properties,
+             ObjectMapper objectMapper,
+             KafkaProducerManager kafkaProducerManager) {
+         this(
+-                properties,
+                 objectMapper,
+                 kafkaProducerManager.getProducerForOverrides(properties.toProducerConfig()));
+     }
+ 
+     /** Visible for tests, so a {@code MockProducer} can stand in for a real broker connection. */
+-    OrchestrationEventKafkaPublisher(
+-            OrchestrationEventKafkaPublisherProperties properties,
+-            ObjectMapper objectMapper,
+-            Producer<String, String> producer) {
+-        this.properties = properties;
++    OrchestrationEventKafkaPublisher(ObjectMapper objectMapper, Producer<String, String> producer) {
+         this.objectMapper = objectMapper;
+         this.producer = producer;
+-        this.eventFactory = new ConductorEventFactory();
+-        this.subscribedEvents = Set.copyOf(properties.getSubscribedEvents());
+-    }
+-
+-    @Override
+-    public void onWorkflowStarted(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.STARTED, workflow);
+-    }
+-
+-    @Override
+-    public void onWorkflowRestarted(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.RESTARTED, workflow);
+-    }
+-
+-    @Override
+-    public void onWorkflowRerun(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.RERAN, workflow);
+     }
+ 
+-    @Override
+-    public void onWorkflowRetried(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.RETRIED, workflow);
+-    }
+-
+-    @Override
+-    public void onWorkflowPaused(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.PAUSED, workflow);
+-    }
+-
+-    @Override
+-    public void onWorkflowResumed(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.RESUMED, workflow);
+-    }
+-
+-    @Override
+-    public void onWorkflowCompleted(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.COMPLETED, workflow);
+-    }
+-
+-    @Override
+-    public void onWorkflowTerminated(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.TERMINATED, workflow);
+-    }
+-
+-    @Override
+-    public void onWorkflowFinalized(WorkflowModel workflow) {
+-        publishEvent(WorkflowEventType.FINALIZED, workflow);
+-    }
+-
+-    private void publishEvent(WorkflowEventType eventType, WorkflowModel workflow) {
+-        if (!subscribedEvents.contains(eventType)) {
+-            return;
+-        }
++    /**
++     * Serializes {@code message} and sends it to {@code topic} keyed by {@code key}. {@code
++     * eventType} and {@code key} are only used for logging; failures are caught and logged, never
++     * thrown, so a Kafka outage cannot fail the workflow/task transition that triggered the event.
++     */
++    public void publish(String topic, String key, String eventType, ConductorEvent message) {
+         try {
+-            ConductorEvent message = eventFactory.buildMessage(eventType, workflow);
+             String jsonPayload = objectMapper.writeValueAsString(message);
+-            String topic =
+-                    properties
+-                            .getEventTopics()
+-                            .getOrDefault(eventType, properties.getDefaultTopic());
+-
+-            ProducerRecord<String, String> record =
+-                    new ProducerRecord<>(topic, workflow.getWorkflowId(), jsonPayload);
++            ProducerRecord<String, String> record = new ProducerRecord<>(topic, key, jsonPayload);
+ 
+             producer.send(
+                     record,
+                     (metadata, exception) -> {
+                         if (exception != null) {
+                             LOGGER.error(
+-                                    "Failed to publish workflow event {} for workflow {}",
++                                    "Failed to publish event {} for key {}",
+                                     eventType,
+-                                    workflow.getWorkflowId(),
++                                    key,
+                                     exception);
+                         } else {
+                             LOGGER.debug(
+-                                    "Published event {} for workflow {} to topic {} partition {} offset {}",
++                                    "Published event {} for key {} to topic {} partition {} offset {}",
+                                     eventType,
+-                                    workflow.getWorkflowId(),
++                                    key,
+                                     metadata.topic(),
+                                     metadata.partition(),
+                                     metadata.offset());
+@@ -147,9 +88,9 @@
+                     });
+         } catch (Exception e) {
+             LOGGER.error(
+-                    "Unexpected error publishing event {} for workflow {}: {}",
++                    "Unexpected error publishing event {} for key {}: {}",
+                     eventType,
+-                    workflow.getWorkflowId(),
++                    key,
+                     e.getMessage(),
+                     e);
+         }
+Index: orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherConfiguration.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherConfiguration.java b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherConfiguration.java
+--- a/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherConfiguration.java	(revision 95a99d33292a6ccc728dc62758b13cad8f76b92b)
++++ b/orchestration-event-kafka-listener/src/main/java/com/netflix/conductor/contribs/listener/orchestrationkafka/OrchestrationEventKafkaPublisherConfiguration.java	(date 1786466919157)
+@@ -18,22 +18,40 @@
+ import org.springframework.context.annotation.Configuration;
+ 
+ import com.netflix.conductor.contribs.tasks.kafka.KafkaProducerManager;
++import com.netflix.conductor.core.listener.TaskStatusListener;
+ import com.netflix.conductor.core.listener.WorkflowStatusListener;
+ 
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ 
+ @Configuration
+ @EnableConfigurationProperties(OrchestrationEventKafkaPublisherProperties.class)
+-@ConditionalOnProperty(
+-        name = "conductor.workflow-status-listener.type",
+-        havingValue = "orchestration-kafka")
+-public class OrchestrationEventKafkaPublisherConfiguration {
+-
+-    @Bean
++public class OrchestrationEventKafkaPublisherConfiguration {
++
++    @Bean
++    @ConditionalOnProperty(
++            name = "conductor.workflow-status-listener.type",
++            havingValue = "orchestration-kafka")
+     public WorkflowStatusListener getWorkflowStatusListener(
+             OrchestrationEventKafkaPublisherProperties properties,
+             ObjectMapper objectMapper,
+             KafkaProducerManager kafkaProducerManager) {
+-        return new OrchestrationEventKafkaPublisher(properties, objectMapper, kafkaProducerManager);
++        return new OrchestrationWorkflowStatusListener(
++                properties, objectMapper, kafkaProducerManager);
++    }
++
++    /**
++     * Independently gated by {@code conductor.task-status-listener.type}, so task tracking can be
++     * turned on without affecting the {@link #getWorkflowStatusListener} bean above (or vice
++     * versa).
++     */
++    @Bean
++    @ConditionalOnProperty(
++            name = "conductor.task-status-listener.type",
++            havingValue = "orchestration-kafka")
++    public TaskStatusListener getTaskStatusListener(
++            OrchestrationEventKafkaPublisherProperties properties,
++            ObjectMapper objectMapper,
++            KafkaProducerManager kafkaProducerManager) {
++        return new OrchestrationTaskStatusListener(properties, objectMapper, kafkaProducerManager);
+     }
+ }
