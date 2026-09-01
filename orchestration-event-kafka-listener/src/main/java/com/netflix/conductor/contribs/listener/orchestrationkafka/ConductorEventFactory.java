@@ -20,6 +20,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.netflix.conductor.common.config.ObjectMapperProvider;
 import com.netflix.conductor.common.run.TaskSummary;
 import com.netflix.conductor.common.run.WorkflowSummary;
 import com.netflix.conductor.common.run.WorkflowSummaryExtended;
@@ -28,12 +32,18 @@ import com.netflix.conductor.core.listener.WorkflowStatusListener.WorkflowEventT
 import com.netflix.conductor.model.TaskModel;
 import com.netflix.conductor.model.WorkflowModel;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 /**
  * Packs a workflow lifecycle event or a task status event into the CITI GRR Orchestration {@link
  * ConductorEvent} schema. Pure transformation, no I/O, so it can be unit tested without a Kafka
  * broker.
  */
 public class ConductorEventFactory {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ConductorEventFactory.class);
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapperProvider().getObjectMapper();
 
     /** Fixed value the Orchestration layer filters on; not configurable per-deployment. */
     private static final String NAMESPACE = "com.citi.grr.orchestration.service.async";
@@ -50,6 +60,11 @@ public class ConductorEventFactory {
      * for debugging goes into {@code messagePayload}, one entry per {@link PayloadField}.
      */
     public ConductorEvent buildMessage(WorkflowEventType eventType, WorkflowModel workflow) {
+        try {
+            LOGGER.info("WorkflowModel fields: {}", OBJECT_MAPPER.writeValueAsString(workflow));
+        } catch (Exception e) {
+            LOGGER.info("Failed to log WorkflowModel fields", e);
+        }
         WorkflowSummary workflowSummary = new WorkflowSummaryExtended(workflow.toWorkflow());
         PayloadSource source = new PayloadSource(workflow, workflowSummary);
 
@@ -70,6 +85,11 @@ public class ConductorEventFactory {
      * for correlation.
      */
     public ConductorEvent buildMessage(TaskModel.Status eventType, TaskModel task) {
+        try {
+            LOGGER.info("TaskModel fields: {}", OBJECT_MAPPER.writeValueAsString(task));
+        } catch (Exception e) {
+            LOGGER.info("Failed to log TaskModel fields", e);
+        }
         TaskSummary taskSummary = new TaskSummary(task.toTask());
         TaskPayloadSource source = new TaskPayloadSource(task, taskSummary);
 
