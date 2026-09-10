@@ -101,6 +101,15 @@ public class HttpTask extends WorkflowSystemTask {
             return;
         }
 
+        LOGGER.info(
+                "HTTP task {} in workflow {} calling {} {} with connectionTimeOut={}ms, readTimeOut={}ms",
+                task.getTaskId(),
+                task.getWorkflowInstanceId(),
+                input.getMethod(),
+                input.getUri(),
+                input.getConnectionTimeOut(),
+                input.getReadTimeOut());
+
         try {
             HttpResponse response = httpCall(input);
             LOGGER.debug(
