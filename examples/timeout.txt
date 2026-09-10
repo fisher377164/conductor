@@ -1,0 +1,29 @@
+Set them directly on the HTTP task's inputParameters in the workflow definition (not a separate config) — values are integers in milliseconds:
+
+  {
+    "name": "call_slow_api",
+    "taskReferenceName": "call_slow_api_ref",
+    "type": "HTTP",
+    "inputParameters": {
+      "uri": "https://api.example.com/data",
+      "method": "GET",
+      "connectionTimeOut": 8000,
+      "readTimeOut": 90000
+    }
+  }
+
+  Notes:
+  - connectionTimeOut = 8000ms (8s) — TCP handshake, fail fast even in slow environments.
+  - readTimeOut = 90000ms (90s) — waiting for response data, sized to the slowest realistic response.
+  - Set 0 for no timeout on either (not recommended — can hang a worker thread indefinitely).
+  - This is per-task, so only the tasks calling slow/high-latency endpoints need loosened values — fast endpoints keep the defaults.
+  - Make sure the task definition's own responseTimeoutSeconds (and the workflow timeout) is set comfortably higher than readTimeOut, otherwise Conductor times out the task before the HTTP call finishes waiting. E.g. if readTimeOut is 90000ms (90s), set responseTimeoutSeconds to at least 120–150.
+  - If you use the legacy nested form, put them inside inputParameters.http_request instead:
+  "inputParameters": {
+    "http_request": {
+      "uri": "https://api.example.com/data",
+      "method": "GET",
+      "connectionTimeOut": 8000,
+      "readTimeOut": 90000
+    }
+  }
