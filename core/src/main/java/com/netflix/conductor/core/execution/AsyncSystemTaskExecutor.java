@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
 import com.netflix.conductor.core.config.ConductorProperties;
 import com.netflix.conductor.core.dal.ExecutionDAOFacade;
 import com.netflix.conductor.core.execution.tasks.WorkflowSystemTask;
+import com.netflix.conductor.core.listener.TaskStatusListener;
 import com.netflix.conductor.core.utils.QueueUtils;
 import com.netflix.conductor.dao.MetadataDAO;
 import com.netflix.conductor.dao.QueueDAO;
@@ -35,6 +36,7 @@ public class AsyncSystemTaskExecutor {
     private final long queueTaskMessagePostponeSecs;
     private final long systemTaskCallbackTime;
     private final WorkflowExecutor workflowExecutor;
+    private final TaskStatusListener taskStatusListener;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AsyncSystemTaskExecutor.class);
 
@@ -43,11 +45,13 @@ public class AsyncSystemTaskExecutor {
             QueueDAO queueDAO,
             MetadataDAO metadataDAO,
             ConductorProperties conductorProperties,
-            WorkflowExecutor workflowExecutor) {
+            WorkflowExecutor workflowExecutor,
+            TaskStatusListener taskStatusListener) {
         this.executionDAOFacade = executionDAOFacade;
         this.queueDAO = queueDAO;
         this.metadataDAO = metadataDAO;
         this.workflowExecutor = workflowExecutor;
+        this.taskStatusListener = taskStatusListener;
         this.systemTaskCallbackTime =
                 conductorProperties.getSystemTaskWorkerCallbackDuration().getSeconds();
         this.queueTaskMessagePostponeSecs =
@@ -111,6 +115,10 @@ public class AsyncSystemTaskExecutor {
 
         boolean hasTaskExecutionCompleted = false;
         boolean shouldRemoveTaskFromQueue = false;
+        // Status as loaded from the store, compared against the status persisted in the finally
+        // block to detect a transition (SCHEDULED -> IN_PROGRESS, or any -> terminal) that must
+        // be reported to the TaskStatusListener.
+        TaskModel.Status statusBeforeExecution = task.getStatus();
         String workflowId = task.getWorkflowInstanceId();
         // if we are here the Task object is updated and needs to be persisted regardless of an
         // exception
@@ -188,6 +196,11 @@ public class AsyncSystemTaskExecutor {
             LOGGER.error("Error executing system task - {}, with id: {}", systemTask, taskId, e);
         } finally {
             executionDAOFacade.updateTask(task);
+            // Notify only after the new status is persisted, and before decide(), so that task
+            // events precede any workflow events that the decide() evaluation may produce.
+            if (task.getStatus() != statusBeforeExecution) {
+                notifyTaskStatusListener(task);
+            }
             if (shouldRemoveTaskFromQueue) {
                 queueDAO.remove(queueName, task.getTaskId());
                 LOGGER.debug("{} removed from queue: {}", task, queueName);
@@ -196,6 +209,22 @@ public class AsyncSystemTaskExecutor {
             if (hasTaskExecutionCompleted) {
                 workflowExecutor.decide(workflowId);
             }
+        }
+    }
+
+    /**
+     * Listener failures must never affect task execution, so they are logged and swallowed, in line
+     * with the other TaskStatusListener call sites.
+     */
+    private void notifyTaskStatusListener(TaskModel task) {
+        try {
+            taskStatusListener.onTaskStatusChangedIfEnabled(task);
+        } catch (Exception e) {
+            LOGGER.error(
+                    "Error while notifying TaskStatusListener: {} for workflow: {}",
+                    task.getTaskId(),
+                    task.getWorkflowInstanceId(),
+                    e);
         }
     }
 

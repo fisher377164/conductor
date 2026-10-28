@@ -938,6 +938,18 @@ public class WorkflowExecutorOps implements WorkflowExecutor {
         return task;
     }
 
+    private void notifyTaskStatusChanged(TaskModel task) {
+        try {
+            taskStatusListener.onTaskStatusChangedIfEnabled(task);
+        } catch (Exception e) {
+            String errorMsg =
+                    String.format(
+                            "Error while notifying TaskStatusListener: %s for workflow: %s",
+                            task.getTaskId(), task.getWorkflowInstanceId());
+            LOGGER.error(errorMsg, e);
+        }
+    }
+
     private void notifyTaskStatusListener(TaskModel task) {
         switch (task.getStatus()) {
             case COMPLETED:
@@ -1640,6 +1652,7 @@ public class WorkflowExecutorOps implements WorkflowExecutor {
                     task.setStartTime(System.currentTimeMillis());
                 }
                 if (!workflowSystemTask.isAsync()) {
+                    TaskModel.Status statusBeforeStart = task.getStatus();
                     try {
                         // start execution of synchronous system tasks
                         workflowSystemTask.start(workflow, task, this);
@@ -1654,6 +1667,12 @@ public class WorkflowExecutorOps implements WorkflowExecutor {
                     }
                     startedSystemTasks = true;
                     executionDAOFacade.updateTask(task);
+                    // Sync system tasks are never queued, so addTaskToQueue does not report them.
+                    // Report the transition produced by start() (typically straight to a
+                    // terminal status) once it has been persisted.
+                    if (task.getStatus() != statusBeforeStart) {
+                        notifyTaskStatusChanged(task);
+                    }
                 } else {
                     tasksToBeQueued.add(task);
                 }

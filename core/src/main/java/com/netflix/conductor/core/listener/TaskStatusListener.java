@@ -75,6 +75,45 @@ public interface TaskStatusListener {
         }
     }
 
+    /**
+     * Dispatches to the {@code on<Status>IfEnabled} callback matching the task's current status.
+     * Intended for call sites that observe a status transition but do not know in advance which
+     * status the task ended up in, e.g. after a system task's {@code start} or {@code execute}.
+     */
+    default void onTaskStatusChangedIfEnabled(TaskModel task) {
+        switch (task.getStatus()) {
+            case SCHEDULED:
+                onTaskScheduledIfEnabled(task);
+                break;
+            case IN_PROGRESS:
+                onTaskInProgressIfEnabled(task);
+                break;
+            case CANCELED:
+                onTaskCanceledIfEnabled(task);
+                break;
+            case FAILED:
+                onTaskFailedIfEnabled(task);
+                break;
+            case FAILED_WITH_TERMINAL_ERROR:
+                onTaskFailedWithTerminalErrorIfEnabled(task);
+                break;
+            case COMPLETED:
+                onTaskCompletedIfEnabled(task);
+                break;
+            case COMPLETED_WITH_ERRORS:
+                onTaskCompletedWithErrorsIfEnabled(task);
+                break;
+            case TIMED_OUT:
+                onTaskTimedOutIfEnabled(task);
+                break;
+            case SKIPPED:
+                onTaskSkippedIfEnabled(task);
+                break;
+            default:
+                break;
+        }
+    }
+
     default void onTaskScheduled(TaskModel task) {}
 
     default void onTaskInProgress(TaskModel task) {}

@@ -198,6 +198,43 @@ public class TaskStatusListenerTest {
     }
 
     @Test
+    public void testTaskStatusChangedDispatchesByStatus() {
+        TestTaskStatusListener listener = new TestTaskStatusListener();
+        TaskModel task = createTaskWithListenerEnabled(true);
+
+        for (TaskModel.Status status : TaskModel.Status.values()) {
+            task.setStatus(status);
+            listener.onTaskStatusChangedIfEnabled(task);
+        }
+
+        // Every status maps to exactly one callback
+        assertEquals(1, listener.scheduledCount);
+        assertEquals(1, listener.inProgressCount);
+        assertEquals(1, listener.completedCount);
+        assertEquals(1, listener.completedWithErrorsCount);
+        assertEquals(1, listener.canceledCount);
+        assertEquals(1, listener.failedCount);
+        assertEquals(1, listener.failedWithTerminalErrorCount);
+        assertEquals(1, listener.timedOutCount);
+        assertEquals(1, listener.skippedCount);
+    }
+
+    @Test
+    public void testTaskStatusChangedRespectsDisabledListener() {
+        TestTaskStatusListener listener = new TestTaskStatusListener();
+        TaskModel task = createTaskWithListenerEnabled(false);
+
+        for (TaskModel.Status status : TaskModel.Status.values()) {
+            task.setStatus(status);
+            listener.onTaskStatusChangedIfEnabled(task);
+        }
+
+        assertEquals(0, listener.inProgressCount);
+        assertEquals(0, listener.completedCount);
+        assertEquals(0, listener.failedCount);
+    }
+
+    @Test
     public void testTaskStatusListenerDefaultValue() {
         // Test that the default value of taskStatusListenerEnabled is true
         TaskDef taskDef = new TaskDef();

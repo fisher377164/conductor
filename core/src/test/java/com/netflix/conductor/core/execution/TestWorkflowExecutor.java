@@ -321,6 +321,12 @@ public class TestWorkflowExecutor {
         assertTrue(stateChanged);
         assertFalse(httpTask.isStarted());
         assertTrue(http2Task.isStarted());
+
+        // The sync system task (HTTP2) moved SCHEDULED -> COMPLETED inside start() and must be
+        // reported; the async (HTTP) and the already IN_PROGRESS (WAIT) tasks must not be.
+        verify(taskStatusListener, times(1)).onTaskStatusChangedIfEnabled(task3);
+        verify(taskStatusListener, never()).onTaskStatusChangedIfEnabled(task1);
+        verify(taskStatusListener, never()).onTaskStatusChangedIfEnabled(task2);
     }
 
     @Test(expected = TerminateWorkflowException.class)

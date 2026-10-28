@@ -15,10 +15,12 @@ package com.netflix.conductor.core.execution
 import java.time.Duration
 
 import com.netflix.conductor.common.metadata.tasks.TaskDef
+import com.netflix.conductor.common.metadata.workflow.WorkflowTask
 import com.netflix.conductor.core.config.ConductorProperties
 import com.netflix.conductor.core.dal.ExecutionDAOFacade
 import com.netflix.conductor.core.execution.tasks.SubWorkflow
 import com.netflix.conductor.core.execution.tasks.WorkflowSystemTask
+import com.netflix.conductor.core.listener.TaskStatusListener
 import com.netflix.conductor.core.utils.IDGenerator
 import com.netflix.conductor.core.utils.QueueUtils
 import com.netflix.conductor.dao.MetadataDAO
@@ -38,6 +40,7 @@ class AsyncSystemTaskExecutorTest extends Specification {
     QueueDAO queueDAO
     MetadataDAO metadataDAO
     WorkflowExecutor workflowExecutor
+    RecordingTaskStatusListener taskStatusListener
 
     @Subject
     AsyncSystemTaskExecutor executor
@@ -50,6 +53,7 @@ class AsyncSystemTaskExecutorTest extends Specification {
         queueDAO = Mock(QueueDAO.class)
         metadataDAO = Mock(MetadataDAO.class)
         workflowExecutor = Mock(WorkflowExecutor.class)
+        taskStatusListener = new RecordingTaskStatusListener()
 
         workflowSystemTask = Mock(WorkflowSystemTask.class) {
             isTaskRetrievalRequired() >> true
@@ -58,7 +62,7 @@ class AsyncSystemTaskExecutorTest extends Specification {
         properties.taskExecutionPostponeDuration = Duration.ofSeconds(1)
         properties.systemTaskWorkerCallbackDuration = Duration.ofSeconds(1)
 
-        executor = new AsyncSystemTaskExecutor(executionDAOFacade, queueDAO, metadataDAO, properties, workflowExecutor)
+        executor = new AsyncSystemTaskExecutor(executionDAOFacade, queueDAO, metadataDAO, properties, workflowExecutor, taskStatusListener)
     }
 
     // this is not strictly a unit test, but its essential to test AsyncSystemTaskExecutor with SubWorkflow
@@ -393,4 +397,187 @@ class AsyncSystemTaskExecutorTest extends Specification {
         task.pollCount == 1 // verify that poll count is NOT incremented
     }
 
+    def "TaskStatusListener is notified of IN_PROGRESS when start moves the task out of SCHEDULED"() {
+        given:
+        TaskModel task = scheduledTask()
+        WorkflowModel workflow = runningWorkflow()
+        workflowSystemTask.getEvaluationOffset(task, 1) >> Optional.empty()
+
+        when:
+        executor.execute(workflowSystemTask, task.taskId)
+
+        then:
+        1 * executionDAOFacade.getTaskModel(task.taskId) >> task
+        1 * executionDAOFacade.getWorkflowModel(task.workflowInstanceId, true) >> workflow
+        1 * workflowSystemTask.start(workflow, task, workflowExecutor) >> { task.status = TaskModel.Status.IN_PROGRESS }
+
+        taskStatusListener.events == [TaskModel.Status.IN_PROGRESS]
+    }
+
+    def "TaskStatusListener is notified of the terminal status when start completes the task"() {
+        given:
+        TaskModel task = scheduledTask()
+        WorkflowModel workflow = runningWorkflow()
+
+        when:
+        executor.execute(workflowSystemTask, task.taskId)
+
+        then:
+        1 * executionDAOFacade.getTaskModel(task.taskId) >> task
+        1 * executionDAOFacade.getWorkflowModel(task.workflowInstanceId, true) >> workflow
+        1 * workflowSystemTask.start(workflow, task, workflowExecutor) >> { task.status = status }
+        1 * workflowExecutor.decide(task.workflowInstanceId)
+
+        taskStatusListener.events == [status]
+
+        where:
+        status << [TaskModel.Status.COMPLETED, TaskModel.Status.FAILED, TaskModel.Status.FAILED_WITH_TERMINAL_ERROR,
+                   TaskModel.Status.TIMED_OUT, TaskModel.Status.COMPLETED_WITH_ERRORS, TaskModel.Status.CANCELED,
+                   TaskModel.Status.SKIPPED]
+    }
+
+    def "TaskStatusListener is notified when execute moves an IN_PROGRESS task to a terminal status"() {
+        given:
+        TaskModel task = scheduledTask()
+        task.status = TaskModel.Status.IN_PROGRESS
+        WorkflowModel workflow = runningWorkflow()
+
+        when:
+        executor.execute(workflowSystemTask, task.taskId)
+
+        then:
+        1 * executionDAOFacade.getTaskModel(task.taskId) >> task
+        1 * executionDAOFacade.getWorkflowModel(task.workflowInstanceId, true) >> workflow
+        1 * workflowSystemTask.execute(workflow, task, workflowExecutor) >> {
+            task.status = TaskModel.Status.COMPLETED
+            return true
+        }
+
+        taskStatusListener.events == [TaskModel.Status.COMPLETED]
+    }
+
+    def "TaskStatusListener is not notified when a re-evaluated IN_PROGRESS task stays IN_PROGRESS"() {
+        given:
+        TaskModel task = scheduledTask()
+        task.status = TaskModel.Status.IN_PROGRESS
+        WorkflowModel workflow = runningWorkflow()
+        workflowSystemTask.getEvaluationOffset(task, 1) >> Optional.empty()
+
+        when:
+        executor.execute(workflowSystemTask, task.taskId)
+
+        then:
+        1 * executionDAOFacade.getTaskModel(task.taskId) >> task
+        1 * executionDAOFacade.getWorkflowModel(task.workflowInstanceId, true) >> workflow
+        1 * workflowSystemTask.execute(workflow, task, workflowExecutor) >> false
+
+        taskStatusListener.events.isEmpty()
+    }
+
+    def "TaskStatusListener is notified of CANCELED when the owning workflow is already terminal"() {
+        given:
+        TaskModel task = scheduledTask()
+        WorkflowModel workflow = new WorkflowModel(workflowId: task.workflowInstanceId, status: WorkflowModel.Status.TERMINATED)
+
+        when:
+        executor.execute(workflowSystemTask, task.taskId)
+
+        then:
+        1 * executionDAOFacade.getTaskModel(task.taskId) >> task
+        1 * executionDAOFacade.getWorkflowModel(task.workflowInstanceId, true) >> workflow
+        0 * workflowSystemTask.start(*_)
+
+        taskStatusListener.events == [TaskModel.Status.CANCELED]
+    }
+
+    def "TaskStatusListener is not notified when the task definition disables it"() {
+        given:
+        TaskModel task = scheduledTask()
+        task.workflowTask = new WorkflowTask(taskDefinition: new TaskDef(taskStatusListenerEnabled: false))
+        WorkflowModel workflow = runningWorkflow()
+
+        when:
+        executor.execute(workflowSystemTask, task.taskId)
+
+        then:
+        1 * executionDAOFacade.getTaskModel(task.taskId) >> task
+        1 * executionDAOFacade.getWorkflowModel(task.workflowInstanceId, true) >> workflow
+        1 * workflowSystemTask.start(workflow, task, workflowExecutor) >> { task.status = TaskModel.Status.COMPLETED }
+
+        taskStatusListener.events.isEmpty()
+    }
+
+    def "TaskStatusListener failure does not interrupt task execution"() {
+        given:
+        TaskModel task = scheduledTask()
+        WorkflowModel workflow = runningWorkflow()
+        String queueName = QueueUtils.getQueueName(task)
+        taskStatusListener.failure = new RuntimeException("kafka unavailable")
+
+        when:
+        executor.execute(workflowSystemTask, task.taskId)
+
+        then:
+        1 * executionDAOFacade.getTaskModel(task.taskId) >> task
+        1 * executionDAOFacade.getWorkflowModel(task.workflowInstanceId, true) >> workflow
+        1 * workflowSystemTask.start(workflow, task, workflowExecutor) >> { task.status = TaskModel.Status.COMPLETED }
+        1 * executionDAOFacade.updateTask(task)
+        1 * queueDAO.remove(queueName, task.taskId)
+        1 * workflowExecutor.decide(task.workflowInstanceId)
+
+        taskStatusListener.events == [TaskModel.Status.COMPLETED]
+    }
+
+    private static TaskModel scheduledTask() {
+        return new TaskModel(taskType: "type1", status: TaskModel.Status.SCHEDULED, taskId: "taskId",
+                workflowInstanceId: "workflowId", taskDefName: "taskDefName", workflowPriority: 10)
+    }
+
+    private static WorkflowModel runningWorkflow() {
+        return new WorkflowModel(workflowId: "workflowId", status: WorkflowModel.Status.RUNNING)
+    }
+
+    /**
+     * Real TaskStatusListener that records the status of every callback it receives, so the tests
+     * exercise the actual dispatch and per-task-definition gating in the interface defaults.
+     */
+    static class RecordingTaskStatusListener implements TaskStatusListener {
+
+        final List<TaskModel.Status> events = []
+        RuntimeException failure
+
+        private void record(TaskModel.Status status) {
+            events << status
+            if (failure != null) {
+                throw failure
+            }
+        }
+
+        @Override
+        void onTaskScheduled(TaskModel task) { record(TaskModel.Status.SCHEDULED) }
+
+        @Override
+        void onTaskInProgress(TaskModel task) { record(TaskModel.Status.IN_PROGRESS) }
+
+        @Override
+        void onTaskCanceled(TaskModel task) { record(TaskModel.Status.CANCELED) }
+
+        @Override
+        void onTaskFailed(TaskModel task) { record(TaskModel.Status.FAILED) }
+
+        @Override
+        void onTaskFailedWithTerminalError(TaskModel task) { record(TaskModel.Status.FAILED_WITH_TERMINAL_ERROR) }
+
+        @Override
+        void onTaskCompleted(TaskModel task) { record(TaskModel.Status.COMPLETED) }
+
+        @Override
+        void onTaskCompletedWithErrors(TaskModel task) { record(TaskModel.Status.COMPLETED_WITH_ERRORS) }
+
+        @Override
+        void onTaskTimedOut(TaskModel task) { record(TaskModel.Status.TIMED_OUT) }
+
+        @Override
+        void onTaskSkipped(TaskModel task) { record(TaskModel.Status.SKIPPED) }
+    }
 }
